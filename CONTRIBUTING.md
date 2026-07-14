@@ -67,7 +67,7 @@ During development:
 ```bash
 git add <intentional-files>
 git diff --staged
-git commit -m "Add planar bushing state"
+git commit -m "Add prescribed rotor state"
 ```
 
 Good commits make later selection easy. Do not combine a force model, unrelated

@@ -13,8 +13,11 @@ completed items so the development path remains reviewable.
 
 ## Phase 1 - agree the physical problem
 
-- [ ] Draw and document the bushing and neighboring compressor components.
-- [ ] Define the global/body coordinate frames and crank-angle convention.
+- [ ] Confirm the cylinder, top vane, cutout, and rotor against compressor CAD.
+- [x] Define the prototype global frame and crank-angle convention.
+- [x] Document the supplied cylinder, rotor, circular-cutout, and vane geometry.
+- [x] Define 9 mm as the rotor-center-to-vane-tip distance at the top position.
+- [ ] Confirm the invisible vane-tip reference relation and clearances against CAD.
 - [ ] Choose degrees of freedom, constraints, and required outputs.
 - [ ] Build a parameter table with symbols, SI units, sources, and ranges.
 - [ ] Inventory all forces and identify which are prescribed or solved.
@@ -37,7 +40,14 @@ traceable result without compressor-specific hidden assumptions.
 
 ## Phase 3 - compressor model
 
-- [ ] Implement and validate prescribed compressor kinematics.
+- [x] Implement and validate the prescribed rotary-compressor test kinematics.
+- [x] Add an interactive test GUI with physical/display speed separation.
+- [x] Use clockwise, top-zero motion and continuous parametric rotor and
+  cylinder-vane contours.
+- [x] Fillet both rotor lips, end the opening at the circular cutout, and keep
+  the changing-length vane overlay transparent.
+- [x] Show the cylinder center, moving rotor center, and dashed eccentric
+  rotor-center locus.
 - [ ] Add accepted load/force models one at a time.
 - [ ] Add contact and friction only after their mathematical treatment is
   selected.

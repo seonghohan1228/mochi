@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mochi-solver"
 version = "0.1.0"
-description = "Numerical solver for bushing motion in a scroll compressor"
+description = "Rotary-compressor simulation and motion visualization"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

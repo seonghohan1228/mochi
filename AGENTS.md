@@ -5,9 +5,11 @@ intentionally named `AGENTS.md` (uppercase) so agent tools discover it.
 
 ## Project overview
 
-`mochi` is a Python numerical solver for the motion of a bushing in a scroll
-compressor. It is in the model-definition stage. Do not infer missing geometry,
-force laws, material properties, or boundary conditions from the project name.
+`mochi` is a Python simulation program for a rotary compressor. The current GUI
+is a supporting prescribed-motion visualization, not the main solver. The wider
+simulation is in the model-definition stage. Do not infer missing force laws,
+material properties, or boundary conditions from the visualization or project
+name.
 
 The hierarchy of truth is:
 

@@ -1,9 +1,9 @@
 # Architecture
 
 `mochi` should keep compressor physics independent from integration algorithms,
-configuration formats, and output. The current code is only a package and CLI
-shell; the structure below is the intended direction, not a claim that these
-modules already exist.
+configuration formats, and output. The current code includes prescribed
+kinematics and a Tkinter test GUI; the remaining structure below is the
+intended direction, not a claim that every module already exists.
 
 ## Data flow
 
@@ -20,7 +20,7 @@ case input
 
 Dependencies point inward toward state and model interfaces. Physics does not
 read files or parse command-line arguments. Numerical integrators do not import
-scroll-compressor force implementations.
+rotary-compressor force implementations.
 
 ## Intended package boundaries
 
@@ -30,12 +30,14 @@ Add modules only when their behavior is implemented and tested:
 src/mochi/
   __init__.py          deliberately small public API
   cli.py               command parsing; no physics equations
+  kinematics.py        current prescribed rotary mechanism
+  gui.py               current Tkinter visualization and controls
   config.py            validated case configuration and unit conversion
   state.py             state and result data structures
   simulation.py        assembles a case and coordinates a solve
   physics/
-    kinematics.py      frames and prescribed component motion
     forces.py          force protocol and total-force assembly
+    contact.py         future contact and constraint laws
     ...                one focused module per accepted physical model
   numerics/
     integrators.py     solver adapters and convergence/failure diagnostics
@@ -55,7 +57,7 @@ The solver should converge on a few explicit concepts:
 - **State:** time, generalized position, and generalized velocity with known
   array shapes and SI units.
 - **Force contribution:** a pure evaluation from time, state, and model data to
-  a force on the bushing in the global frame.
+  a force on the modeled body in the global frame.
 - **Dynamics function:** assembles forces and returns a derivative or residual.
 - **Integrator:** advances a generic dynamics function and reports numerical
   diagnostics without knowing compressor details.

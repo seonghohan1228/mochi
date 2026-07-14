@@ -1,4 +1,4 @@
-"""Numerical tools for scroll-compressor bushing dynamics."""
+"""Simulation tools for a rotary compressor."""
 
 __version__ = "0.1.0"
 
