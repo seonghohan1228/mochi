@@ -31,6 +31,14 @@ src/mochi/
   __init__.py          deliberately small public API
   cli.py               command parsing; no physics equations
   kinematics.py        current prescribed rotary mechanism
+  rotor_profile.py     rotor boundary contour (OD flat and asymmetric mouth)
+  ports.py             port angular windows and characteristic angles
+  chambers.py          crank-angle chamber cross-sections (circular-rotor
+                       approximation) and the port-timed pressure phases
+  chamber_volume.py    chamber volumes from the true rotor contour, swing
+                       bush, and stepped vane
+  indicated_work.py    indicated work and power from the P-V cycle
+  bush_film.py         swing-bush Couette + Poiseuille lubrication films
   gui.py               current Tkinter visualization and controls
   config.py            validated case configuration and unit conversion
   state.py             state and result data structures

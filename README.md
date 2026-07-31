@@ -65,16 +65,58 @@ The initial inputs are:
 | Vane width | 8 mm |
 | Vane-tip calibration | 9 mm from the rotor center when the rotor is at the top |
 
-The inlet marker is 30 degrees to the right of the positive y axis; the
-outlet marker is approximately symmetric on the left. These are schematic
-port locations, not flow boundary conditions. Angle zero is the top rotor
-position and positive angle advances clockwise. The vane length continues to
-change while its unfilled outline overlaps the rotor below the circular
-cutout. The rotor opening stops at that circle and has tangent fillets at its
-two outer lips. The GUI shows prescribed geometry only and does not yet
+The ports are drawn as angular windows on the bore, not as single markers:
+the suction port opens at phi = 10.4 degrees and closes at beta = 27.7, and
+the discharge port spans gamma = 7.2 degrees ending delta = 13.2 degrees
+before top dead center. All four are editable in the input panel. The status
+bar reports which port phase the current crank angle is in and how much of
+the discharge port is still open to the compression chamber, which the
+rotor-cylinder contact wipes shut over the port's own width. See
+`PHYSICS.md` section 3.4. Angle zero is the top rotor
+position and positive angle advances clockwise. The vane is integral with the
+cylinder and drawn with its fixed 25 mm length; its unfilled outline may
+overlap the rotor silhouette below the circular cutout, which the real parts
+avoid through the axial stepped structure documented in `PHYSICS.md` section
+3.3. The rotor is drawn from `mochi.rotor_profile`, which builds the
+confirmed asymmetric mouth: the inlet side of the outside diameter is cut by
+a straight and both lips run tangent-continuously into the circular groove. The GUI shows prescribed geometry only and does not yet
 calculate pressure, contact force, or torque.
 The display marks the cylinder center `C`, the moving rotor center `R`, and
 the rotor-center orbit as a dashed circle of radius equal to the eccentricity.
+
+The status bar also reports the suction (IN side) and discharge (OUT side)
+chamber cross-section areas and volumes at the current crank angle, using
+the supplied 21 mm axial cylinder height. These come from the circular-rotor
+approximation documented in `PHYSICS.md` section 3.1: the rotor is treated
+as its full outside-diameter disc and the crescent between rotor and
+cylinder is split by the vane and the rotor-cylinder tangency. The status
+bar also shows the accepted absolute R410A chamber pressures
+(`mochi.chambers.chamber_pressures`, `PHYSICS.md` section 3.2): the suction
+chamber stays at the 0.82 MPa suction-port pressure while the compression
+chamber rises polytropically (effective R410A exponent n = 1.07) from
+0.82 MPa at seal-over until the discharge valve opens at about 3.40 MPa
+(3.24 MPa port pressure plus a 5 % valve rise), then declines linearly to
+the 3.24 MPa port pressure during delivery. Near top dead center (about
++/-6 degrees for the supplied geometry) the two chambers merge into one;
+the status bar reports this seal-over mixing window, during which the
+merged region ramps linearly from 3.24 MPa down to the suction pressure,
+reaching it exactly at 360 degrees. Keep the
+`Lock e` checkbox enabled: with any smaller eccentricity the rotor no longer
+seals on the cylinder and no chamber split is defined.
+
+`mochi.chamber_volume` measures the same chambers on the real boundary
+instead — the rotor contour, both swing-bush pieces, the stepped vane's
+axial bands, and the R2.1 vane-root blends — which the circular-rotor
+approximation cannot do. It supplies the 0.165 cm3 clearance volume that the
+recompression phase of `mochi.chambers.port_timed_pressures` starts from,
+which is rotor mouth cavity gas. Each crank angle costs an area integration,
+so these volumes are not drawn per frame.
+
+The `Stop at crank angle (deg)` input with its `Stop at the crank angle above`
+checkbox pauses the animation exactly at a chosen crank angle. The animation
+stops the first time the clockwise motion reaches that angle; pressing `Start`
+again completes one more full revolution back to the same angle. This is a
+display control only and does not change the physical speed.
 
 ## Collaboration model
 
@@ -112,8 +154,16 @@ corresponding guide in the same pull request.
 src/mochi/             installable Python package
   cli.py               command-line entry point
   kinematics.py        prescribed rotary mechanism geometry and motion
+  rotor_profile.py     rotor contour: OD flat and asymmetric mouth lips
+  ports.py             port angular windows and characteristic angles
+  chambers.py          crank-angle chamber cross-sections (circular rotor)
+                       and the port-timed pressure phases
+  chamber_volume.py    chamber volumes from the true rotor contour, swing
+                       bush, and stepped vane
   gui.py               Tkinter test GUI and animation
   __main__.py          `python -m mochi` entry point
+scripts/
+  generate_results.py  regenerate the git-ignored results/ figures
 tests/                 fast unit and regression tests
 .github/workflows/     checks run for branches and pull requests
 AGENTS.md               instructions for automated coding agents
@@ -124,9 +174,13 @@ PLAN.md                 development stages and open decisions
 CHANGES.md              append-only change history
 ```
 
-Generated simulations belong under `results/` and are ignored by Git. Small,
-reviewed reference data may later be committed under `tests/data/` with its
-origin, units, and generation procedure documented.
+Generated simulations belong under `results/` and are ignored by Git. They are
+rebuilt from the current model by `python scripts/generate_results.py` (which
+needs the `viz` extra: `python -m pip install -e ".[viz]"`); `--prune` deletes
+any figure that is no longer produced, so `results/` only ever holds the latest
+render. See AGENTS.md, "Generated and local files". Small, reviewed reference
+data may later be committed under `tests/data/` with its origin, units, and
+generation procedure documented.
 
 ## Current scope
 

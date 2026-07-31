@@ -21,6 +21,12 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.5",
 ]
+# Plotting stack for scripts/generate_results.py only. The solver and GUI do
+# not depend on it; results/ figures are regenerated, not committed.
+viz = [
+    "matplotlib>=3.8",
+    "pillow>=10",
+]
 
 [project.scripts]
 mochi = "mochi.cli:main"
