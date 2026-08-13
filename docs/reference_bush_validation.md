@@ -163,19 +163,45 @@ moves all three indicators together:
 
 The journal clearance is what controls it: at `c_j = 10 µm` the roller's excursion is 2.2 µm
 and the film swings 0.5–6.2 µm; at 20 µm the excursion is 5.9 µm and the swing reaches
-9.3–9.5 µm. Amplitude, phase and RMS improving **together** when a term is added — rather than
-one being traded against another as a parameter is turned — is the signature of a missing
-mechanism being supplied, not of a curve being fitted.
+9.3–9.5 µm.
 
-Two things this does **not** mean. It is still not a match: RMS 3.95 µm against films of
-2–14.5 µm, correlation 0.760, and the residual still one-signed (mean −4.83 µm on the upper
-edge). And it adds a fourth unknown, `c_j`, which neither paper gives and which now dominates
-the amplitude — so the agreement rests on it.
+### 3.3 …but it does not survive the operating sweeps
 
-**Nothing here changes this project's model.** The freedom that was missing is one
-`rotor_bush_dynamics` already has; what lacked it was the validation harness. If anything the
-episode is a check on the model's structure: the DOF our machine carries for its rotor turns
-out to be the one the reference machine needs for its blade.
+That agreement holds at **one operating point only**. J08 also reports how the film moves with
+discharge pressure (Fig.10/11) and with speed (Fig.12/13), and states both trends in the text:
+pressure up → `h_u` **down** and tilt **down** (nearly parallel at 2.1 MPa); frequency up →
+`h_u` **up** and tilt **up**. Running the fitted configuration across both sweeps:
+
+| | `h_u` mean | tilt | J08 says |
+|---|---|---|---|
+| p_d 1.2 / 1.6 / 2.1 MPa | 13.15 / 13.28 / **14.18** µm | 0.0916 / 0.0923 / **0.0959°** | both should **fall** |
+| f 22 / 28 / 37 Hz | 13.65 / 13.28 / 13.34 µm | 0.0938 / 0.0923 / 0.0924° | both should **rise** |
+
+The pressure trend comes out **backwards**, and the frequency response is essentially **flat**
+— a 1.75x change in pressure and a 1.68x change in speed move the film by under 5 %.
+
+Instrumenting the roller shows where that comes from, and it is not the obvious places. The
+eccentricity ratio never touches its 0.995 clamp (peak 0.741), so it is not saturation; and
+the centrifugal term is 22 N against a 312 N gas load, so it is not centrifugal dominance.
+What happens is that the **mean** eccentricity responds correctly — 0.517 → 0.657 as the gas
+load goes 208 → 442 N, and 0.643 → 0.536 as speed rises — while the **excursion**, which is
+what sets the film's amplitude, is pinned at 5.72–5.85 µm in all six conditions. The roller
+traces a nearly fixed-size orbit whose centre moves; the film amplitude follows the orbit
+size, so it inherits that insensitivity.
+
+The cause of the fixed orbit size was **not identified**. Two of the candidates are unknowns
+this harness introduced rather than physics: the journal clearance `c_j`, and the roller bore
+radius, which was assumed at `0.45 R_o` with no source and to which the journal's load
+capacity goes as the cube.
+
+**So section 3.2's agreement should be read as a single-point fit, not as a validated
+mechanism.** Adding the freedom was the right structural move — the blade demonstrably does
+move — but the harness reproduces one waveform while failing the trends that would show the
+physics is right, and it does so with two ungrounded parameters. Pushing further would be
+fitting.
+
+**Nothing in any of this changes this project's model.** The freedom that was missing is one
+`rotor_bush_dynamics` already has; what lacked it was the validation harness.
 
 ## 4. Causes still open
 
@@ -192,15 +218,18 @@ out to be the one the reference machine needs for its blade.
 3. **Physics both models omit.** Thermal wedge, surface texture, and bulk elastic deformation
    are absent from T02's model and from ours alike. Elastic deflection is the largest of these
    by scale: at the pressures involved it is micron-order, comparable to the films themselves.
-4. ~~Whatever drives the bush's stroke.~~ **Closed by section 3.2** — it was the blade's own
-   journal excursion, absent from the harness. The residual is now one-signed offset rather
-   than missing amplitude.
-5. **The remaining one-signed offset.** With the amplitude supplied, the model still sits
-   ~4.8 um thick on the upper edge at every angle. That is the part that still points at
-   items 1–3, and at the sub-micron films both models predict.
-6. **The journal clearance `c_j`.** Neither paper gives it, and it now sets the amplitude
-   (2.2 um excursion at 10 um, 5.9 um at 20 um). The agreement in section 3.2 is conditional
-   on it.
+4. **What fixes the roller's orbit size.** Section 3.3: the mean eccentricity tracks load and
+   speed correctly, but the excursion is stuck at ~5.8 um in every condition, and that is what
+   sets the film amplitude. Until this is understood the harness cannot follow the operating
+   sweeps in either direction.
+5. **The one-signed offset.** The model sits ~4.8 um thick on the upper edge at every angle of
+   the standard case. Its size matches the runout J08 quotes for that sensor (+/-4.8 um), but
+   the lower edge — which Fig.6 shows carries comparable runout — is off by only 0.7 um, so
+   runout alone does not explain it. Points back at items 1-3.
+6. **Two parameters this harness invented.** The journal clearance `c_j` and the roller bore
+   radius (assumed `0.45 R_o`, with the journal's capacity going as its cube) are in no
+   source. Both bear directly on the amplitude, so the section 3.2 agreement is conditional
+   on them.
 
 ## 5. What was NOT done
 
@@ -214,6 +243,15 @@ The honest status is: **our bush film module agrees with the published model of 
 sliding pair and disagrees with the published measurement of it, by the same factor that
 model does.** That is a defensible position to hold, and the open items above are what would
 have to be settled to move off it.
+
+On the harness side the status is narrower still: it reproduces the standard-case waveform to
+RMS 3.95 um with the blade freed (section 3.2), but **fails the operating sweeps**, getting the
+pressure trend backwards and the speed trend flat (section 3.3), with two parameters that have
+no source. A harness that matches one waveform and misses the trends has not validated
+anything; it has been fitted. That is why the work stops here rather than continuing to
+adjust — the next honest step is evidence, not another parameter: the roller bore and journal
+clearance from a drawing, and Fig.10/Fig.12 digitised so the trends can be compared as numbers
+rather than as signs.
 
 ## 6. Data
 
