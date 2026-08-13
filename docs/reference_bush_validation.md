@@ -137,8 +137,45 @@ structurally, not short of tuning.
 
 So the honest reading is that this is **missing physics, not unfound parameters**: with the
 unknowns cut to three and the whole waveform used as the target, it still fails, and it fails
-by not moving the bush far enough over the cycle. That is plausibly the same root as the
-sub-micron film both models predict.
+by not moving the bush far enough over the cycle.
+
+## 3.2 The missing physics: the blade moves too
+
+The amplitude failure had a specific cause, and it was in the harness rather than in the film
+model. The harness held the blade rigidly on its prescribed path, so only the bush could open
+the gap. But the blade is integral with the roller, and the roller rides its crank pin on an
+oil film — it wanders. The machine this project models carries exactly that freedom already:
+`rotor_bush_dynamics` solves the rotor bore eccentricity `e_j` as two DOF, and over a
+revolution its component normal to the pad spans **8.98 µm** — against a measured film swing
+of **9.13 µm**. That match in size is what suggested the fix.
+
+Giving the roller its own two freedoms, driven the way the rotor's are (blade gas load,
+crank-pin journal film via the same Ocvirk mapping, bush reaction, centrifugal), and letting
+the gap follow **both** bodies — `h0 = bush offset − blade offset along the pad normal` —
+moves all three indicators together:
+
+| | measured | blade fixed | **blade free** |
+|---|---|---|---|
+| `h_u` peak-to-peak | 9.13 µm | 5.78 µm | **9.34 µm** |
+| RMS (both edges) | — | 5.01 µm | **3.95 µm** |
+| correlation (upper) | — | 0.639 | **0.760** |
+| residual RMS, upper / lower | — | 6.75 / 2.18 µm | **5.34 / 1.62 µm** |
+
+The journal clearance is what controls it: at `c_j = 10 µm` the roller's excursion is 2.2 µm
+and the film swings 0.5–6.2 µm; at 20 µm the excursion is 5.9 µm and the swing reaches
+9.3–9.5 µm. Amplitude, phase and RMS improving **together** when a term is added — rather than
+one being traded against another as a parameter is turned — is the signature of a missing
+mechanism being supplied, not of a curve being fitted.
+
+Two things this does **not** mean. It is still not a match: RMS 3.95 µm against films of
+2–14.5 µm, correlation 0.760, and the residual still one-signed (mean −4.83 µm on the upper
+edge). And it adds a fourth unknown, `c_j`, which neither paper gives and which now dominates
+the amplitude — so the agreement rests on it.
+
+**Nothing here changes this project's model.** The freedom that was missing is one
+`rotor_bush_dynamics` already has; what lacked it was the validation harness. If anything the
+episode is a check on the model's structure: the DOF our machine carries for its rotor turns
+out to be the one the reference machine needs for its blade.
 
 ## 4. Causes still open
 
@@ -155,11 +192,15 @@ sub-micron film both models predict.
 3. **Physics both models omit.** Thermal wedge, surface texture, and bulk elastic deformation
    are absent from T02's model and from ours alike. Elastic deflection is the largest of these
    by scale: at the pressures involved it is micron-order, comparable to the films themselves.
-4. **Whatever drives the bush's stroke.** Section 3.1's failure is specifically an amplitude
-   failure — the modelled bush barely moves over the revolution while the measured one sweeps
-   ~9 um. Either the forcing that moves it (the gas-ramp variation and squeeze) is too weak or
-   the seat film holds it too stiffly. This is the sharpest single lead left, and it may share
-   a root with the sub-micron film both models predict.
+4. ~~Whatever drives the bush's stroke.~~ **Closed by section 3.2** — it was the blade's own
+   journal excursion, absent from the harness. The residual is now one-signed offset rather
+   than missing amplitude.
+5. **The remaining one-signed offset.** With the amplitude supplied, the model still sits
+   ~4.8 um thick on the upper edge at every angle. That is the part that still points at
+   items 1–3, and at the sub-micron films both models predict.
+6. **The journal clearance `c_j`.** Neither paper gives it, and it now sets the amplitude
+   (2.2 um excursion at 10 um, 5.9 um at 20 um). The agreement in section 3.2 is conditional
+   on it.
 
 ## 5. What was NOT done
 
