@@ -43,7 +43,7 @@ from math import isfinite
 import numpy as np
 
 from mochi.bush_film import LUBRICANT_VISCOSITY_PA_S
-from mochi.line_reynolds import solve_line_pressure
+from mochi.line_reynolds import poiseuille_bias_pressure, solve_line_pressure
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +54,8 @@ class ArcFilmForce:
     force_y_n: float
     min_film_thickness_m: float
     max_pressure_pa: float
+    throughflow_m3_s: float = 0.0  # pressure-driven (Poiseuille) leakage across the arc
+    shear_moment_nm: float = 0.0  # Couette shear moment on the piece about O_p (rotor-swing drag)
 
 
 def arc_film_force(
@@ -70,6 +72,10 @@ def arc_film_force(
     clearance_m: float,
     viscosity_pa_s: float = LUBRICANT_VISCOSITY_PA_S,
     n_beta: int = 361,
+    pressure_start_pa: float = 0.0,
+    pressure_end_pa: float = 0.0,
+    cavitation_pressure_pa: float = 0.0,
+    shear_speed_rad_s: float = 0.0,
 ) -> ArcFilmForce:
     """Axial-uniform 1-D film reaction on a partial-arc (bush) piece.
 
@@ -78,6 +84,18 @@ def arc_film_force(
     height ``H``. The pressure is solved along the arc (axial-uniform) and integrated
     with the height, so the returned 2-D force on the piece is ``O(H)``; its reaction
     ``-F`` acts on the rotor groove.
+
+    ``pressure_start_pa`` / ``pressure_end_pa`` are the gas pressures the arc ends open
+    to (the local chamber / crank-bore pressures, gauge; the arc runs from
+    ``arc_center - arc_half_span`` to ``arc_center + arc_half_span``). They add the
+    Poiseuille gas-bias field (:func:`mochi.line_reynolds.poiseuille_bias_pressure`) to
+    the hydrodynamic pressure by superposition; both default to zero (the pure
+    hydrodynamic film). ``throughflow_m3_s`` reports the resulting pressure-driven
+    leakage ``H (p_start - p_end)/(12 mu integral h^-3 dx)``.
+
+    ``cavitation_pressure_pa`` is the pressure below which the film cavitates, in the same
+    gauge as the end pressures; the clamp is applied to the **total** (hydrodynamic + gas)
+    field. The default ``0.0`` is classic Gumbel (half-Sommerfeld) cavitation.
     """
 
     for value in (ecc_x_m, ecc_y_m, ecc_dot_x_m_s, ecc_dot_y_m_s, entrainment_speed_rad_s):
@@ -109,13 +127,41 @@ def arc_film_force(
     line_source = 12.0 * viscosity_pa_s * radius_m**2 * source
 
     d_beta = 2.0 * arc_half_span_rad / (n_beta - 1)
-    pressure = solve_line_pressure(film, line_source, d_beta)  # Pa, Gumbel-clamped
+    gas_present = pressure_start_pa != 0.0 or pressure_end_pa != 0.0
+    # Reynolds is linear in p, so the hydrodynamic field is solved UNCLAMPED and the gas bias
+    # superposed; cavitation is then applied to the **total**, which is where the physical
+    # constraint lives (see mochi.slider_film for the same treatment).
+    pressure = solve_line_pressure(film, line_source, d_beta, cavitation=False)
+
+    throughflow = 0.0
+    if gas_present:
+        gas = poiseuille_bias_pressure(film, d_beta, pressure_start_pa, pressure_end_pa)
+        pressure = pressure + gas  # superposition (Reynolds linear in p)
+        # Pressure-driven throughflow (Poiseuille slot leakage) along the arc, arc
+        # length element dx = r dbeta, so the h^-3 integral carries the r factor.
+        inv_h3_integral = float(np.trapezoid(film**-3.0, dx=radius_m * d_beta))
+        throughflow = (
+            length_m * (pressure_start_pa - pressure_end_pa)
+            / (12.0 * viscosity_pa_s * inv_h3_integral)
+        )
+    np.maximum(pressure, cavitation_pressure_pa, out=pressure)
 
     force_x = -radius_m * length_m * float(np.trapezoid(pressure * cos_b, dx=d_beta))
     force_y = -radius_m * length_m * float(np.trapezoid(pressure * sin_b, dx=d_beta))
+    # Couette shear moment on the piece about its centre O_p: the groove surface shears
+    # the film at the relative rotation ``shear_speed_rad_s``, dragging the piece. The
+    # tangential traction mu*(shear_speed*r)/h acts at lever r over dA = r H dbeta, so
+    # M = mu * shear_speed * r^3 * H * integral(dbeta / h). This is the (viscous) moment
+    # that couples the piece rotation to the rotor swing; zero when shear_speed = 0.
+    shear_moment = (
+        viscosity_pa_s * shear_speed_rad_s * radius_m**3 * length_m
+        * float(np.trapezoid(1.0 / film, dx=d_beta))
+    )
     return ArcFilmForce(
         force_x_n=force_x,
         force_y_n=force_y,
         min_film_thickness_m=float(np.min(film)),
         max_pressure_pa=float(np.max(pressure)),
+        throughflow_m3_s=throughflow,
+        shear_moment_nm=shear_moment,
     )

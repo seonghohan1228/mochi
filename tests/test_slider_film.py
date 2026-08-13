@@ -113,3 +113,45 @@ def test_invalid_inputs_raise() -> None:
         flat_slider_film(0.0, 0.0, 0.0, 0.0, 0.0, length_m=0.0, height_m=H, clearance_m=CF)
     with pytest.raises(ValueError):
         flat_slider_film(0.0, 0.0, 0.0, 0.0, 0.0, length_m=LF, height_m=H, clearance_m=CF, n_s=4)
+
+
+# ---------------------------------------------------------------------------
+# Gas-pressure boundary conditions (chamber/crank pressures at the pad ends)
+# ---------------------------------------------------------------------------
+
+
+def test_gas_bias_equal_ends_add_pressure_times_area() -> None:
+    """Both ends at chamber pressure P add a uniform bias P over the pad (no leakage)."""
+
+    p_gas = 2.0e6
+    base = flat_slider_film(0.0, 0.0, 0.0, 0.0, 0.0, length_m=LF, height_m=H, clearance_m=CF)
+    biased = flat_slider_film(
+        0.0, 0.0, 0.0, 0.0, 0.0, length_m=LF, height_m=H, clearance_m=CF,
+        pressure_start_pa=p_gas, pressure_end_pa=p_gas,
+    )
+    assert biased.normal_force_n - base.normal_force_n == pytest.approx(p_gas * LF * H, rel=1e-3)
+    assert biased.throughflow_m3_s == 0.0
+
+
+def test_gas_bias_ramp_shifts_load_and_leaks() -> None:
+    """A P->0 pressure drop across the pad adds the mean (P/2) load and a Poiseuille leak."""
+
+    p_gas, mu = 1.0e6, LUBRICANT_VISCOSITY_PA_S
+    f = flat_slider_film(
+        0.0, 0.0, 0.0, 0.0, 0.0, length_m=LF, height_m=H, clearance_m=CF, n_s=4001,
+        pressure_start_pa=p_gas, pressure_end_pa=0.0,
+    )
+    assert f.normal_force_n == pytest.approx(0.5 * p_gas * LF * H, rel=2e-3)
+    assert f.throughflow_m3_s == pytest.approx(H * p_gas * CF**3 / (12.0 * mu * LF), rel=1e-3)
+
+
+def test_gas_bias_defaults_are_backward_compatible() -> None:
+    """Zero end pressures (the default) reproduce the pure hydrodynamic film exactly."""
+
+    a = flat_slider_film(0.0, 1.0e-4, 0.0, 0.0, 0.5, length_m=LF, height_m=H, clearance_m=CF)
+    b = flat_slider_film(
+        0.0, 1.0e-4, 0.0, 0.0, 0.5, length_m=LF, height_m=H, clearance_m=CF,
+        pressure_start_pa=0.0, pressure_end_pa=0.0,
+    )
+    assert a.normal_force_n == pytest.approx(b.normal_force_n)
+    assert a.throughflow_m3_s == 0.0

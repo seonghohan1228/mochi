@@ -1501,6 +1501,62 @@ is the long-bearing analogue of the §4.12 short-bearing (Ocvirk) cross-check. M
 `mochi.long_bearing` (`long_bearing_load`, `sommerfeld_pressure`); tests
 `tests/test_long_bearing.py` (22).
 
+**Gas boundary conditions, and cavitation on the *total* field.** Both bush films open
+to gas at their ends, so the imposed end pressures add the source-free Poiseuille
+field $p_{gas}(\xi)=p_0+(p_L-p_0)\,C(\xi)/C(L)$, $C(\xi)=\int_0^\xi h^{-3}d\xi'$
+(`mochi.line_reynolds.poiseuille_bias_pressure`). Reynolds is **linear in $p$**, so the
+physical field is the superposition $p=p_{hyd}+p_{gas}$ — but **cavitation is a
+constraint on that sum, not on $p_{hyd}$ alone**. An earlier revision disabled the
+clamp whenever end pressures were present (on the assumption that gas flooding
+suppresses cavitation); evaluated at the real operating state the total reached
+$-11.6$ MPa **absolute** on the diverging half-stroke of the reciprocating pad, worth
+$-2310$ N of impossible suction. The solvers therefore compute $p_{hyd}$ unclamped,
+superpose $p_{gas}$, and clamp the sum at `cavitation_pressure_pa` (expressed in the
+same gauge as the end pressures; default $0$ recovers classic Gumbel exactly). The
+floor follows one rule for all three films — *a film cannot fall below the lowest
+pressure it is connected to* — which for the crank-pin journal (symmetric $4.0$ MPa
+ends) degenerates to the existing $p_{cav}=p_{rec}$ of §4.10, and for the bush films
+(asymmetric recess $\leftrightarrow$ chamber ends) gives $p_{cav}=\min(0,p_{ch}-p_{rec})$.
+The exact floor between the chamber pressure and absolute zero depends on the
+oil/refrigerant solubility and is **not** modelled (§9).
+
+**Curved-film sealing land and its ends.** The curved film does not span the whole
+piece arc: per §3.3 the groove wall runs from the mouth blend to the channel opening,
+an **$86.5^\circ$ land** ($41.5^\circ$ mouth side $+\,45.0^\circ$ channel side about the
+piece's arc centre); beyond it the arc faces gas, not oil. Those two ends open to
+*different* gases — the rotor **mouth** (the piece's own chamber) and the **recess
+channel** at $p_{rec}=4.0$ MPa — so the curved film carries a genuine pressure drop,
+mirrored between the two pieces. Modelling it yields $+367$ N per piece **away from the
+vane**, largely cancelling the flat film's $-400$ N gas squeeze; omitting it (the earlier
+state) left that squeeze unbalanced.
+
+**Mixed lubrication (Greenwood–Tripp).** Where the films run into the roughness
+($\Lambda=h_{min}/\sigma\lesssim3$) the asperities share the load with the film. The
+contact pressure is the standard elastic Greenwood–Tripp form
+$p_{asp}=\tfrac{16\sqrt2}{15}\pi(\eta\beta\sigma)^2E'\sqrt{\sigma/\beta}\,F_{5/2}(h/\sigma)$
+(`mochi.asperity_contact`), driven by measurable surface parameters rather than an
+arbitrary pressure scale, and applied to **both** bush films by load sharing. Friction
+is then boundary ($\mu_b$ on the asperity load) plus viscous shear, reported separately
+on `RotorBushOrbit`. Literature-typical ground-steel values ($\beta=10\,\mu$m,
+$\eta=10^{10}\,$m$^{-2}$, $E'=115$ GPa, $\eta\beta\sigma\approx0.05$) are placeholders
+pending a surface measurement (§9); the flat-film loss varies over 66–91 W across
+$\beta=5$–$40\,\mu$m. Tests `tests/test_asperity_contact.py` (6).
+
+**Why the curved film runs thin — a load-path consequence, not an artefact.** The rotor
+attitude EOM (§4.14) closes with $M_{gas}=+22.2$ vs $M_{bush,curved}=-21.3$ N·m (96 %
+cancelled, residual $0.019$ N·m $=2\%$ of the reference inertia torque): the curved film
+**is** the structural path that carries the gas moment. Reacting it at the groove lever
+$l_g=25$ mm demands $21.28/0.025=851$ N of curved-film force. A direct load-capacity
+sweep of `arc_film` at the swing entrainment ($\Omega\approx34$ rad/s) gives $725$ N at
+$\varepsilon=0.98$ and $1527$ N at $0.99$, so $851$ N sits at $\varepsilon\approx0.985$,
+i.e. a $\approx0.45\,\mu$m film — which is what the coupled orbit reports ($0.58\,\mu$m).
+The thin curved film and its $\varepsilon$ against the safety rail are therefore
+**required by the load path**, not a numerical artefact; adding elastic (Winkler)
+compliance to the arc moved $\varepsilon/\varepsilon_{max}$ only $1.328\to1.330$ (the
+eccentricity is set by geometry — the piece is pinned to the vane by the flat film while
+the groove rides the rotor) and was reverted. Full record:
+`docs/bush_film_revision_2026-08.md`.
+
 ### 4.12 Numerical short-bearing (1-D) Reynolds solver
 
 Step (i) of the §4.10 1D$\to$2D ladder, and the project's **first PDE-style film
@@ -1620,8 +1676,8 @@ same geometry.
 **The nine equations of motion.** Rotor (3): the §4.13 lateral EOM with the curved
 reactions $-\mathbf{F}_{c,k}$ added at $O_g$, plus a rotor-attitude equation
 
-$$m_r\ddot{\mathbf{e}}_j = \mathbf{F}_{gas}+\mathbf{F}_{journal}+\textstyle\sum_k(-\mathbf{F}_{c,k})+m_r\omega^2O_j,\qquad
-I_r\,\delta\ddot\phi_r = M_{gas}+M_{fric}+\textstyle\sum_k[(O_g-O_b)\times(-\mathbf{F}_{c,k})]_z - I_r\ddot\phi_\text{orient,ref}.$$
+$$m_r\ddot{\mathbf{e}}_j = \mathbf{F}_{gas}+\mathbf{F}_{journal}+\textstyle\sum_k(-\mathbf{F}_{c,k})+\mathbf{F}_{seal}+m_r\omega^2O_j,\qquad
+I_r\,\delta\ddot\phi_r = M_{gas}+M_{fric}+\textstyle\sum_k[(O_g-O_b)\times(-\mathbf{F}_{c,k})]_z + M_{seal} - I_r\ddot\phi_\text{orient,ref}.$$
 
 The reference-inertia term $-I_r\ddot\phi_\text{orient,ref}$ ($\lesssim1.4$ N·m) is the
 angular analogue of the lateral $m_r\omega^2O_j$ -- $\phi_\text{orient}=\phi_\text{orient,ref}+\delta\phi_r$
@@ -1632,6 +1688,21 @@ through $O_p$ and adds no moment). $I_p$ is the raster CM inertia (§4.8) rescal
 the confirmed $m_p=6.341$ g and shifted to the piece centre by parallel axis
 ($\approx2.7\times10^{-7}$ kg·m²). Curved-film entrainment $\Omega_c=\tfrac12(\dot\phi_\text{orient}+\dot\phi_k)$
 (the mean groove + piece spin; the piece barely spins).
+
+**The tenth force — rotor–cylinder sealing contact (default on).** The rotor OD also
+seals against the cylinder bore (§4.15). By default (`seal_contact=True`) that contact
+is solved **inside this 9-DOF system**, not in the reduced free-rotor model of §4.15: a
+compliant Hertz line contact (`hertz_line_contact_force_n`) acts on the rotor along
+$\hat u=O_b/|O_b|$ when the OD penetrates the bore ($|O_b|>e$), with boundary friction
+tangential at $O_b+R_r\hat u$,
+$$\mathbf{F}_{seal}=-N_c\,\hat u-\mu N_c\,\text{sgn}(v_\text{slide})\,\hat t,\qquad
+M_{seal}=-R_r\,\mu N_c\,\text{sgn}(v_\text{slide})$$
+(the normal is radial through $O_b$ and adds no moment; only the friction does, over the
+lever $R_r$). This is the **full methodology**: $N_c$ is driven by the always-outward
+centrifugal $m_r\omega^2 e$, so the seal engagement — and the loss — scale with
+$\omega^2$; **any operating-speed sweep must keep the coupling on**, or the
+(speed-dependent) rotor-cylinder loss is missing entirely. Setting `seal_contact=False`
+isolates the bush films (no cylinder reaction), for the reduction cross-checks only.
 
 **Result -- the swing bush is a heavily loaded element.** The rotor gas *moment* about
 $O_b$ ($M_{gas}$ up to $\approx22$ N·m) can only be reacted against the fixed vane
@@ -1650,6 +1721,23 @@ Stage 6 deliverable. **This is a hydrodynamic-only first cut**
 consequence and flags the bush as the critical wear/lubrication site, to revisit with
 the gas bias and an EHL/contact treatment.
 
+**Result — the coupled sealing load and its attribution.** With the seal on (default),
+the $\sim6\,\mu$m free-orbit bore penetration collapses to a physical
+$\approx2.4\,\mu$m Hertz deflection and the sealing load is **$N_c\approx296$ N mean,
+$1455$ N peak** — about **twice** the free-rotor reduced model ($140$ N, §4.15). The
+cycle-mean *radial* force balance (outward $+$, N) attributes it cleanly:
+gas $-223$, journal $+709$, bush $-234$, seal $-296$, centrifugal $+44$ (sum $\approx0$).
+The **bush reaction is inward** — it does *not* push the rotor onto the bore. Rather,
+tying the rotor to the **fixed vane loads the crank-pin journal** ($+323\to+709$ N
+outward vs the free rotor), and that journal force, net of the inward bush, presses the
+rotor $\sim1\,\mu$m deeper into the cylinder. So the free-floating model of §4.15
+**under-predicts the seal loss by $2\times$ precisely because it omits the vane
+constraint**, and the coupled value of record is $\dot W_{r\text{-}c}\approx11$ W
+($\mu=0.1$, Ra 0.3 µm). The seal-friction torque ($R_r\mu N_c\approx1.0$ N·m) is
+reacted through the bush without distorting the attitude ($\delta\phi_r$ stays
+$\approx1$ mrad, unchanged from the seal-off run), and $N_c$ is converged (identical
+over revolutions 4–6).
+
 **Numerics.** The squeeze films are extremely stiff (a fast $\sim3\times10^{-8}$ s
 overdamped eigenvalue: $\dot{\mathbf{e}}_c\!=\!0.01$ m/s already gives $\sim$kN). BDF
 with a uniformly tight `atol` pins to that timescale forever; a **loose absolute
@@ -1661,10 +1749,44 @@ The pieces start at the reference groove velocity so the squeeze films begin unl
 $20\,\mu$m shift into the $30\,\mu$m concentric gap and the flat approach is zero, so
 both films are $10\,\mu$m (§4.11, `film_thicknesses_m`). (ii) *Perturbation:* the
 integrated deviations stay small and the orbit is periodic. (iii) *Piece inertia:* the
-parallel-axis inertia exceeds the CM value. Implemented in `mochi.rotor_bush_dynamics`
-(`integrate_rotor_bush_orbit` → `RotorBushOrbit`); tests
-`tests/test_rotor_bush_dynamics.py` (10). Open items §9: gas-pressure film bias,
-curved entrainment sign cross-check, EHL/contact for the near-contact film.
+parallel-axis inertia exceeds the CM value. (iv) *Seal coupling:* the radial force
+balance closes, the penetration collapses to sub-3 µm, and $N_c$ is revolution-converged.
+(v) *1-D Reynolds vs analytical:* each film's 1-D reduction reproduces its closed-form
+reference to $\le10^{-4}$ — bush curved vs the long-bearing Sommerfeld load, bush flat
+vs the Reynolds fixed-incline slider, journal vs Ocvirk (figures
+`bush_film/reynolds_{curved_vs_long_bearing, flat_vs_incline_slider, journal_vs_ocvirk}.png`,
+one per film). Implemented in `mochi.rotor_bush_dynamics`
+(`integrate_rotor_bush_orbit` → `RotorBushOrbit`, `seal_contact=True` by default); tests
+`tests/test_rotor_bush_dynamics.py` (13); figures
+`bush_film/film_clearance_{journal, bush_curved, bush_flat}.png`
+(each film's clearance at the most-loaded crank angle),
+`bush_film/bush_{curved, flat}_clearance_vs_crank.png` (each bush film's minimum clearance over
+the whole cycle for both pieces -- the IN and OUT pieces alternate as the gas moment reverses,
+the curved IN film reaching $\approx0.7\,\mu$m),
+`assembly/{layout, bush_clearance, journal_clearance}_42deg.png` (the journal, vane, rotor
+and two bush pieces at the most-loaded angle -- the full assembly at true scale, and the
+bush and journal clearances at one uniform exaggeration factor with the piece/groove centre
+offsets, showing the IN piece run into near-contact), and
+`bearing_load/friction_dynamic_vs_quasistatic.png` (per-film quasi-static vs dynamic:
+bush ×3.3, journal ×1.0, seal ×3.7, total ×1.6). **Gas-pressure film boundary conditions — a finding (`gas_film_boundary=True`, opt-in;
+the default keeps the validated hydrodynamic films).** The 1-D
+film solvers accept chamber/crank gas pressures at the ends
+(`arc_film_force`/`flat_slider_film` `pressure_start_pa`/`pressure_end_pa`), superposing
+the Poiseuille gas-bias field (`poiseuille_bias_pressure`; Reynolds is linear in $p$, and
+the high gas pressure suppresses cavitation so the hydrodynamic part runs full-Sommerfeld)
+and reporting the throughflow leakage. In the coupled EOM the piece is immersed in the
+**bore gas $P_\text{bore}=4$ MPa** (above both chambers), so the film pressures are
+referenced to it and the uniform immersion cancels by the divergence theorem — the
+**flat (vane-sealing) film** then carries the net gas load, running a bore→chamber drop
+(outer end at the piece's chamber: IN=suction, OUT=compression; inner end the bore), while
+the curved film stays in the bore region (no drop). **Result — a first-order, in fact
+dominant, effect:** the bore gas presses each piece onto the vane, driving the flat film
+from $\approx1.8\,\mu$m down to the $0.2\,\mu$m contact floor and raising the (Couette)
+bush friction from $0.67$ to $\approx5.5$ W (×8); the rotor orbit and the rotor-cylinder
+seal are unchanged. Because the flat film reaches metal contact, this pure-hydrodynamic
+value is **contact-clamp-limited** — the vane-bush flat interface now needs an EHL/contact
+treatment, exactly as the rotor-cylinder seal did (§4.15). Open items §9: that flat-film
+EHL/contact, the curved-film gas mapping, curved entrainment sign cross-check.
 
 ### 4.15 Rotor-cylinder sealing contact — sliding kinematics and friction
 
@@ -1717,7 +1839,14 @@ typical $\sigma=0.2\,\mu$m ($B/A\approx0.43$), and is strongly roughness-driven 
 → near full-film $\sim0.7$ W, rough → boundary bound). This rigid estimate brackets **$\dot W_{r\text{-}c}\approx1$–3 W** but omits the
 inertial loading; the self-consistent rung below is the definitive value.
 
-**Self-consistent closure (the rung).** `integrate_sealing_contact` replaces the
+**Self-consistent closure — reduced free-rotor cross-check (the rung).**
+`integrate_sealing_contact` is a **4-state rotor-only** model (lateral bore motion +
+journal film + contact + gas + centrifugal, *no bush/vane*); it is the cheap cross-check,
+**not** the value of record. Coupling the same contact into the full 9-DOF system (§4.14,
+`seal_contact=True`, the default) roughly **doubles** $N_c$ because the bush ties the
+rotor to the fixed vane and loads the journal (attribution in §4.14). Take the coupled
+$\dot W_{r\text{-}c}\approx11$ W as the value of record; the free-rotor value below
+under-predicts by $\sim2\times$. `integrate_sealing_contact` replaces the
 arbitrary penalty with the **physical compliant Hertz line contact**
 (`hertz_line_contact_force_n`, Palmgren: $\delta[\text{mm}]=3.84\times10^{-5}\,
 Q^{0.9}/L^{0.8}$ — $\sim0.22\,\mu$m deflection at $100$ N) added to the §4.13 rotor EOM
@@ -1731,17 +1860,20 @@ mean $\approx140$ N, peak $\approx780$ N**, contact ~1/3 of the cycle. The frict
 ($\sim44$ N)** and the inertial bore excursions press the rotor onto the bore harder
 than the quasi-static gas balance alone:
 
-$$\boxed{\dot W_{r\text{-}c}\approx 6.7\ \text{W}}\quad(\mu=0.1,\ \text{Ra}=0.3\,\mu\text{m}).$$
+$$\dot W_{r\text{-}c}\approx 6.7\ \text{W}\ \text{(free-rotor reduced model)}\quad\Rightarrow\quad
+\boxed{\dot W_{r\text{-}c}\approx 11\ \text{W}}\ \text{(coupled 9-DOF, §4.14 — value of record)}\quad(\mu=0.1,\ \text{Ra}=0.3\,\mu\text{m}).$$
 
 At the **Ra 0.3 µm design-standard finish** the composite RMS is $\sigma=\sqrt2\cdot
 1.25\,\text{Ra}=0.53\,\mu$m, so $\Lambda\approx0.45$ — essentially **boundary**
 lubrication, and mixed-EHL coincides with the boundary bound ($6.7$ W). (For a smoother
 $\sigma=0.2\,\mu$m the film would be mixed, $\Lambda\approx1.2$, dropping mixed-EHL to
 $\approx5.3$ W; roughness is the one free lever.) Insensitive to the contact-onset
-smoothing. **So the rotor-cylinder seal is a first-order mechanical loss — comparable to
-the crank-pin journal ($8.9$ W), an order above the bush (**$\approx0.6$ W**, the
+smoothing. **So the rotor-cylinder seal is a first-order mechanical loss — in the coupled
+model ($\approx11$ W) it is the *largest* single mechanical loss, above the crank-pin
+journal ($8.9$ W) and an order above the bush (**$\approx0.6$ W**, the
 Section 4.14 *dynamic* value of record; the $0.2$ W quasi-static §3.6 estimate is kept
-only for comparison)** — and the
+only for comparison)** — even the free-rotor $6.7$ W already reaches the journal's order,
+and the
 earlier "tens of W" (pessimistic $N_c$) and "1–3 W" (rigid, no inertia) both bracketed
 it loosely. Implemented in
 `mochi.rotor_cylinder` (`integrate_sealing_contact` → `SealContactOrbit`;
@@ -1927,7 +2059,18 @@ The following questions block a physical production solver:
   crank-pin journal environment** (2026-07-31): the rotor-centre/crank region is a
   uniform 4.0 MPa (circumferential/radial pressure split, not axial), so the journal
   film carries symmetric $4.0$ MPa axial-end BCs and $p_{cav}=4.0$ MPa (§4.10). The
-  bush-face recess BCs remain to be confirmed.
+  bush **film-end** BCs are now resolved from the §3.3 geometry (2026-08, §4.11): the
+  flat pad runs recess$\to$chamber, and the curved film lives on the $86.5^\circ$
+  sealing land whose ends open to the recess channel and the rotor mouth. Two pieces of
+  this remain open: (i) the **cavitation floor** — the rule adopted is "no lower than the
+  lowest connected pressure", but the true value lies between the chamber pressure and
+  absolute zero and needs an oil/refrigerant **solubility** model (the bush loss is very
+  sensitive to it: 48.7 W vs 6.2 W at 1800 rpm across that span); (ii) the
+  Greenwood–Tripp surface parameters $\beta,\eta$, which need a **surface measurement**
+  (66–91 W across the literature range). Whether the curved film really rides at
+  $\Lambda\approx1$ in hardware is a wear question, not a modelling one — note the squeeze
+  term is $\sim16\times$ the wedge at equal eccentricity, so the real machine may ride on
+  squeeze more than this steady-orbit model does.
 - [x] Confirm the crank-pin journal bearing dimensions against CAD. Radius
   $r_j = 14.2$ mm (bounded by the 17 mm bush-groove clearance) and length
   $L_j = 21$ mm are now taken from the CAD model (Section 4.7). The radial

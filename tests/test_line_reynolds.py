@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from mochi.line_reynolds import solve_line_pressure
+from mochi.line_reynolds import poiseuille_bias_pressure, solve_line_pressure
 
 
 def _grid(n, length):
@@ -70,3 +70,42 @@ def test_rejects_bad_inputs() -> None:
         solve_line_pressure(np.array([1e-5, -1e-5, 1e-5]), np.zeros(3), 1e-4)  # film <= 0
     with pytest.raises(ValueError):
         solve_line_pressure(good, good, 0.0)  # non-positive step
+
+
+# ---------------------------------------------------------------------------
+# Gas-pressure boundary conditions (Poiseuille bias, PHYSICS.md 4.11)
+# ---------------------------------------------------------------------------
+
+
+def test_poiseuille_bias_uniform_film_is_linear() -> None:
+    """A uniform gap gives a linear pressure ramp between the two end pressures."""
+
+    n, length = 201, 0.01
+    _, step = _grid(n, length)
+    film = np.full(n, 1.0e-5)
+    p = poiseuille_bias_pressure(film, step, 2.0e6, 5.0e5)
+    assert p[0] == pytest.approx(2.0e6)
+    assert p[-1] == pytest.approx(5.0e5)
+    assert np.allclose(p, np.linspace(2.0e6, 5.0e5, n), rtol=1e-9)
+
+
+def test_poiseuille_bias_varying_film_is_monotone_with_exact_ends() -> None:
+    """A converging gap keeps the ends exact and the field monotone high->low."""
+
+    n, length = 401, 0.01
+    _, step = _grid(n, length)
+    film = 1.0e-5 * (1.0 + 0.5 * np.sin(np.linspace(0.0, np.pi, n)))
+    p = poiseuille_bias_pressure(film, step, 1.0e6, 0.0)
+    assert p[0] == pytest.approx(1.0e6)
+    assert p[-1] == pytest.approx(0.0, abs=1e-6)
+    assert np.all(np.diff(p) <= 1e-6)  # non-increasing from high to low end
+
+
+def test_poiseuille_bias_equal_ends_is_uniform() -> None:
+    """Equal end pressures give a uniform field (no throughflow gradient)."""
+
+    n, length = 101, 0.01
+    _, step = _grid(n, length)
+    film = 1.0e-5 * (1.0 + 0.3 * np.cos(np.linspace(0.0, np.pi, n)))
+    p = poiseuille_bias_pressure(film, step, 3.0e6, 3.0e6)
+    assert np.allclose(p, 3.0e6, rtol=1e-12)

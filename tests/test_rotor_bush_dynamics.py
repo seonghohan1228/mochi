@@ -36,7 +36,9 @@ def trace(geometry):
 @pytest.fixture(scope="module")
 def orbit(geometry, trace):
     # Coarse but converged enough for the reduction / boundedness checks; the fast
-    # squeeze transient decays inside the first revolution.
+    # squeeze transient decays inside the first revolution. gas_film_boundary is off so
+    # these check the hydrodynamic bush + seal dynamics in isolation (the gas boundary
+    # condition, which drives the flat film toward contact, has its own test below).
     return integrate_rotor_bush_orbit(
         geometry,
         revolutions=2,
@@ -45,6 +47,7 @@ def orbit(geometry, trace):
         n_beta=61,
         n_s=41,
         trace=trace,
+        gas_film_boundary=False,
     )
 
 
@@ -195,3 +198,77 @@ def test_confirmed_masses_and_inertia_are_reported(orbit):
     assert orbit.piece_mass_kg == pytest.approx(BUSH_PIECE_MASS_KG)
     assert orbit.rotor_inertia_kg_m2 == pytest.approx(ROTOR_POLAR_INERTIA_KG_M2)
     assert np.isfinite(orbit.piece_inertia_kg_m2) and orbit.piece_inertia_kg_m2 > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Rotor-cylinder sealing contact (the default full methodology, Section 4.15)
+# ---------------------------------------------------------------------------
+
+
+def test_seal_contact_is_engaged_and_physical(orbit):
+    """The centrifugal load keeps the seal engaged; N_c is O(100s N), penetration sub-um.
+
+    The ~6 um free-orbit bore penetration collapses to the physical Hertz deflection
+    (< 3 um), and the boundary friction is real dissipation.
+    """
+
+    assert orbit.mean_seal_normal_force_n > 0.0
+    assert 200.0 < orbit.mean_seal_normal_force_n < 450.0  # coupled level (rev-2 coarse)
+    assert orbit.peak_seal_normal_force_n > orbit.mean_seal_normal_force_n
+    assert 0.0 < orbit.max_seal_penetration_m < 3.0e-6
+    assert orbit.seal_contact_friction_power_w > 0.0
+
+
+def test_seal_radial_balance_and_attribution(orbit):
+    """The radial force balance closes, and the load split is the attributed mechanism.
+
+    The bush reaction is *inward* (it does not directly press the rotor out); the
+    crank-pin journal, loaded by the fixed-vane constraint the bush enforces, reacts
+    *outward* and is what drives the rotor onto the bore. The cylinder reacts inward.
+    """
+
+    gas, journal, bush, seal, cent = orbit.mean_radial_force_breakdown_n
+    assert abs(gas + journal + bush + seal + cent) < 5.0  # steady-state, mean accel ~ 0
+    assert journal > 0.0  # journal film reacts outward (the muscle)
+    assert bush < 0.0  # bush reaction is inward (the messenger, not the cause)
+    assert seal < 0.0  # cylinder reacts the net outward push inward
+    assert 40.0 < cent < 48.0  # centrifugal m_r omega^2 e ~ 44 N, always outward
+    # The seal reaction magnitude equals the reported N_c mean.
+    assert -seal == pytest.approx(orbit.mean_seal_normal_force_n, rel=1e-6)
+
+
+def test_gas_film_boundary_squeezes_the_flat_film(geometry, trace):
+    """The 4 MPa bore gas presses the piece onto the vane (Section 4.11 gas BC).
+
+    Referenced to the bore, the flat (vane-sealing) film runs a bore->chamber drop that
+    pushes the piece toward the vane, thinning the flat film toward contact and raising
+    the (Couette) bush friction sharply -- flagging the vane-bush interface for an
+    EHL/contact treatment, as the rotor-cylinder seal already got.
+    """
+
+    kw = {"revolutions": 2, "samples": 40, "grid_samples": 90, "n_beta": 61, "n_s": 41,
+          "trace": trace}
+    hydro = integrate_rotor_bush_orbit(geometry, gas_film_boundary=False, **kw)
+    gas = integrate_rotor_bush_orbit(geometry, gas_film_boundary=True, **kw)
+    assert gas.minimum_flat_film_m < hydro.minimum_flat_film_m  # squeezed thinner
+    assert gas.bush_friction_power_w > 3.0 * hydro.bush_friction_power_w  # much higher loss
+
+
+def test_seal_contact_can_be_disabled(geometry, trace):
+    """seal_contact=False isolates the bush films: no cylinder reaction, empty seal data."""
+
+    decoupled = integrate_rotor_bush_orbit(
+        geometry,
+        revolutions=1,
+        samples=16,
+        grid_samples=90,
+        n_beta=61,
+        n_s=41,
+        trace=trace,
+        seal_contact=False,
+    )
+    assert decoupled.seal_normal_force_n == ()
+    assert decoupled.mean_radial_force_breakdown_n == ()
+    assert decoupled.mean_seal_normal_force_n == 0.0
+    assert decoupled.seal_contact_friction_power_w == 0.0
+    assert decoupled.bush_friction_power_w > 0.0  # the bush model still runs

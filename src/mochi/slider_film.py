@@ -41,7 +41,7 @@ from math import isfinite
 import numpy as np
 
 from mochi.bush_film import LUBRICANT_VISCOSITY_PA_S
-from mochi.line_reynolds import solve_line_pressure
+from mochi.line_reynolds import poiseuille_bias_pressure, solve_line_pressure
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +55,7 @@ class SliderFilmForce:
     normal_force_n: float
     moment_nm: float
     min_film_thickness_m: float
+    throughflow_m3_s: float = 0.0  # pressure-driven (Poiseuille) leakage along the pad
 
 
 def flat_slider_film(
@@ -69,6 +70,9 @@ def flat_slider_film(
     clearance_m: float,
     viscosity_pa_s: float = LUBRICANT_VISCOSITY_PA_S,
     n_s: int = 201,
+    pressure_start_pa: float = 0.0,
+    pressure_end_pa: float = 0.0,
+    cavitation_pressure_pa: float = 0.0,
 ) -> SliderFilmForce:
     """Axial-uniform 1-D flat-slider film force and moment on a bush piece.
 
@@ -77,6 +81,19 @@ def flat_slider_film(
     ``tilt_rate``, and ``slide_speed`` is the sliding along the vane. ``length_m`` is
     the sliding span ``L_f`` and ``height_m`` the axial height ``H``. Returns the
     normal force (off the vane) and the moment about the pad centre.
+
+    ``pressure_start_pa`` / ``pressure_end_pa`` are the gas pressures the pad ends
+    (``s = -L_f/2`` and ``s = +L_f/2``) open to -- the local chamber and crank/bore
+    pressures (gauge). They superpose the Poiseuille gas-bias field onto the
+    hydrodynamic pressure (Reynolds is linear in ``p``; both default to zero). The
+    pressure-driven leakage is reported in ``throughflow_m3_s``.
+
+    ``cavitation_pressure_pa`` is the pressure below which the film cavitates, in the **same
+    gauge** as ``pressure_start_pa`` / ``pressure_end_pa``; the clamp is applied to the total
+    (hydrodynamic + gas) field. The default ``0.0`` reproduces classic Gumbel
+    (half-Sommerfeld) cavitation for the pure-hydrodynamic pad. When the ends are referenced
+    to a pressurised ambient (e.g. the rotor-bore gas), pass the ambient's negative
+    (``-p_ambient``) so the clamp sits at absolute zero rather than at the reference.
     """
 
     for value in (approach_m, tilt_rad, approach_rate_m_s, tilt_rate_rad_s, slide_speed_m_s):
@@ -99,7 +116,25 @@ def flat_slider_film(
     line_source = 12.0 * viscosity_pa_s * source
 
     d_s = length_m / (n_s - 1)
-    pressure = solve_line_pressure(film, line_source, d_s)  # Pa, Gumbel-clamped
+    gas_present = pressure_start_pa != 0.0 or pressure_end_pa != 0.0
+    # Reynolds is linear in p, so the hydrodynamic field is solved UNCLAMPED and the gas
+    # bias superposed; cavitation is then applied to the **total**, which is where the
+    # physical constraint lives (a sub-cavitation total cannot exist, whatever its parts
+    # are). Clamping only the hydrodynamic part -- or skipping the clamp because gas is
+    # present -- lets a reciprocating pad keep a huge unphysical suction lobe on the
+    # diverging half-stroke and slams it into contact.
+    pressure = solve_line_pressure(film, line_source, d_s, cavitation=False)
+
+    throughflow = 0.0
+    if gas_present:
+        gas = poiseuille_bias_pressure(film, d_s, pressure_start_pa, pressure_end_pa)
+        pressure = pressure + gas  # superposition (Reynolds linear in p)
+        inv_h3_integral = float(np.trapezoid(film**-3.0, dx=d_s))
+        throughflow = (
+            height_m * (pressure_start_pa - pressure_end_pa)
+            / (12.0 * viscosity_pa_s * inv_h3_integral)
+        )
+    np.maximum(pressure, cavitation_pressure_pa, out=pressure)
 
     normal_force = height_m * float(np.trapezoid(pressure, dx=d_s))
     moment = height_m * float(np.trapezoid(pressure * s, dx=d_s))
@@ -107,4 +142,5 @@ def flat_slider_film(
         normal_force_n=normal_force,
         moment_nm=moment,
         min_film_thickness_m=float(np.min(film)),
+        throughflow_m3_s=throughflow,
     )

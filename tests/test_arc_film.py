@@ -125,3 +125,45 @@ def test_invalid_inputs_raise() -> None:
             clearance_m=C,
             n_beta=4,
         )
+
+
+# ---------------------------------------------------------------------------
+# Gas-pressure boundary conditions (chamber/crank pressures at the arc ends)
+# ---------------------------------------------------------------------------
+
+
+def test_gas_bias_equal_ends_change_force_without_leak() -> None:
+    """Equal end pressures add a uniform gas field: the force shifts, no throughflow."""
+
+    hydro = _arc(0.3 * C, 0.0, 0.0, 0.0, 40.0, half=math.pi / 2, center=0.0)
+    biased = arc_film_force(
+        0.3 * C, 0.0, 0.0, 0.0, 40.0, arc_center_rad=0.0, arc_half_span_rad=math.pi / 2,
+        radius_m=R, length_m=L, clearance_m=C, n_beta=2001,
+        pressure_start_pa=2.0e6, pressure_end_pa=2.0e6,
+    )
+    assert biased.throughflow_m3_s == 0.0
+    assert biased.force_x_n != pytest.approx(hydro.force_x_n)
+
+
+def test_gas_bias_unequal_ends_drive_throughflow() -> None:
+    """A pressure drop across the arc drives a Poiseuille leak (sign follows the drop)."""
+
+    f = arc_film_force(
+        0.3 * C, 0.0, 0.0, 0.0, 40.0, arc_center_rad=0.0, arc_half_span_rad=math.pi / 2,
+        radius_m=R, length_m=L, clearance_m=C, n_beta=2001,
+        pressure_start_pa=1.5e6, pressure_end_pa=0.0,
+    )
+    assert f.throughflow_m3_s > 0.0
+
+
+def test_gas_bias_default_is_backward_compatible() -> None:
+    """Zero end pressures reproduce the pure hydrodynamic arc film exactly."""
+
+    a = _arc(0.3 * C, 0.1 * C, 0.0, 0.0, 40.0, half=math.pi / 2)
+    b = arc_film_force(
+        0.3 * C, 0.1 * C, 0.0, 0.0, 40.0, arc_center_rad=0.0, arc_half_span_rad=math.pi / 2,
+        radius_m=R, length_m=L, clearance_m=C, n_beta=2001,
+        pressure_start_pa=0.0, pressure_end_pa=0.0,
+    )
+    assert a.force_x_n == pytest.approx(b.force_x_n)
+    assert a.throughflow_m3_s == 0.0
