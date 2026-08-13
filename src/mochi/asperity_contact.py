@@ -52,7 +52,12 @@ class AsperityParams:
     reduced_modulus_pa: float = DEFAULT_REDUCED_MODULUS_PA  # E'
 
     def validate(self) -> None:
-        for name in ("roughness_m", "summit_radius_m", "summit_density_per_m2", "reduced_modulus_pa"):
+        for name in (
+            "roughness_m",
+            "summit_radius_m",
+            "summit_density_per_m2",
+            "reduced_modulus_pa",
+        ):
             value = getattr(self, name)
             if not (np.isfinite(value) and value > 0.0):
                 raise ValueError(f"AsperityParams.{name} must be a positive, finite number.")
@@ -63,7 +68,11 @@ class AsperityParams:
         return self.summit_density_per_m2 * self.summit_radius_m * self.roughness_m
 
 
-def greenwood_tripp_pressure(h_m, params: AsperityParams = AsperityParams()):
+#: Module-level default so the parameters are constructed once, not per call.
+DEFAULT_ASPERITY = AsperityParams()
+
+
+def greenwood_tripp_pressure(h_m, params: AsperityParams | None = None):
     """Asperity contact pressure ``p_asp(h)`` (Pa), vectorised over the separation ``h_m``.
 
     ``h_m`` is the local mean film/separation (can be <= 0 for deep contact). Returns 0 where
@@ -71,6 +80,7 @@ def greenwood_tripp_pressure(h_m, params: AsperityParams = AsperityParams()):
     plastic-flow pressure for numerical safety in deep incursions.
     """
 
+    params = DEFAULT_ASPERITY if params is None else params
     sigma = params.roughness_m
     lam = np.asarray(h_m, dtype=float) / sigma  # H = h/sigma
     base = np.maximum(4.0 - lam, 0.0)

@@ -7169,7 +7169,7 @@ def render_film_clearance_journal(curve: PressureCurve, path: Path) -> None:
 
 
 def render_film_clearance_bush_curved(curve: PressureCurve, path: Path) -> None:
-    """Bush curved (rotor-groove) film thickness h(β) for both pieces at the loaded angle (§4.14)."""
+    """Bush curved (rotor-groove) film h(β) for both pieces at the most-loaded angle (§4.14)."""
 
     st = _clearance_at_angle_state(curve)
     half_arc, curved_gap, groove = st["half_arc"], st["curved_gap"], st["groove"]
@@ -7773,9 +7773,8 @@ def data_orbit_film_journal(curve: PressureCurve, path: Path) -> None:
     angle = np.degrees(fr["theta"])
     phi_deg = np.degrees(np.linspace(0.0, 2.0 * pi, 361))
     phi = np.radians(phi_deg)
-    h_um = (
-        c["c_j"] - (fr["ejx"][None, :] * np.cos(phi)[:, None] + fr["ejy"][None, :] * np.sin(phi)[:, None])
-    ) * 1e6  # [phi, time]
+    ex, ey = fr["ejx"][None, :], fr["ejy"][None, :]
+    h_um = (c["c_j"] - (ex * np.cos(phi)[:, None] + ey * np.sin(phi)[:, None])) * 1e6  # [phi, time]
     frames = [
         (float(time_s[j]), float(angle[j]), [phi_deg, h_um[:, j]]) for j in range(time_s.size)
     ]

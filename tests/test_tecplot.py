@@ -63,7 +63,7 @@ def test_transient_strand_headers(tmp_path):
         point_zone("f1", [np.arange(3.0), np.arange(3.0) + 1], strand_id=1, solution_time=0.5),
     ]
     path = write_dat(tmp_path / "strand.dat", ["x", "h"], zones)
-    headers = [l for l in _read(path) if l.startswith("ZONE")]
+    headers = [line for line in _read(path) if line.startswith("ZONE")]
     assert len(headers) == 2
     assert 'ZONE T="f0", I=3, F=POINT, STRANDID=1, SOLUTIONTIME=0' == headers[0]
     assert "STRANDID=1, SOLUTIONTIME=0.5" in headers[1]

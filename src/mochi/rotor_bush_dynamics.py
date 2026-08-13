@@ -352,7 +352,9 @@ def _flat_asperity_contact(approach, tilt, clearance, asperity, length, height, 
     return force, moment
 
 
-def _curved_asperity_contact(ecc_x, ecc_y, arc_center, half_arc, radius, height, gap, asperity, n_beta):
+def _curved_asperity_contact(
+    ecc_x, ecc_y, arc_center, half_arc, radius, height, gap, asperity, n_beta
+):
     """Distributed Greenwood-Tripp asperity contact on the curved (rotor-groove) arc.
 
     Local gap ``h(beta) = gap - (ecc_x cos beta + ecc_y sin beta)`` from the *real*
@@ -471,7 +473,9 @@ def integrate_rotor_bush_orbit(
         else piece_inertia_kg_m2
     )
     # Greenwood-Tripp asperity parameters for the mixed-lubrication films (both bush films).
-    asperity = asperity_params if asperity_params is not None else AsperityParams(roughness_m=roughness_m)
+    asperity = (
+        asperity_params if asperity_params is not None else AsperityParams(roughness_m=roughness_m)
+    )
     asperity.validate()
 
     grid, gas_x, gas_y, gas_m, speed, suc_p, comp_p = _prescribe_gas(geometry, grid_samples, trace)
@@ -641,7 +645,8 @@ def integrate_rotor_bush_orbit(
                 asp_fx = side * asp_force
                 if curved_asperity:
                     asp_c_x, asp_c_y = _curved_asperity_contact(
-                        ecc_x, ecc_y, arc_center, half_arc, radius, height, curved_gap, asperity, n_beta
+                        ecc_x, ecc_y, arc_center, half_arc, radius, height, curved_gap,
+                        asperity, n_beta,
                     )
 
             # Piece equations of motion (absolute world frame). The gas-pressure boundary
