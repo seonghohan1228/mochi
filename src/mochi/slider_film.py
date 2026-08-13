@@ -73,6 +73,8 @@ def flat_slider_film(
     pressure_start_pa: float = 0.0,
     pressure_end_pa: float = 0.0,
     cavitation_pressure_pa: float = 0.0,
+    check_physical: bool = False,
+    reference_pressure_pa: float = 0.0,
 ) -> SliderFilmForce:
     """Axial-uniform 1-D flat-slider film force and moment on a bush piece.
 
@@ -135,6 +137,13 @@ def flat_slider_film(
             / (12.0 * viscosity_pa_s * inv_h3_integral)
         )
     np.maximum(pressure, cavitation_pressure_pa, out=pressure)
+    if check_physical:
+        from mochi.physical_checks import check_film_positive, check_pressure_field
+
+        check_film_positive(film, label="slider film")
+        check_pressure_field(
+            pressure, reference_pressure_pa=reference_pressure_pa, label="slider film"
+        )
 
     normal_force = height_m * float(np.trapezoid(pressure, dx=d_s))
     moment = height_m * float(np.trapezoid(pressure * s, dx=d_s))

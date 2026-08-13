@@ -76,6 +76,8 @@ def arc_film_force(
     pressure_end_pa: float = 0.0,
     cavitation_pressure_pa: float = 0.0,
     shear_speed_rad_s: float = 0.0,
+    check_physical: bool = False,
+    reference_pressure_pa: float = 0.0,
 ) -> ArcFilmForce:
     """Axial-uniform 1-D film reaction on a partial-arc (bush) piece.
 
@@ -145,6 +147,13 @@ def arc_film_force(
             / (12.0 * viscosity_pa_s * inv_h3_integral)
         )
     np.maximum(pressure, cavitation_pressure_pa, out=pressure)
+    if check_physical:
+        from mochi.physical_checks import check_film_positive, check_pressure_field
+
+        check_film_positive(film, label="arc film")
+        check_pressure_field(
+            pressure, reference_pressure_pa=reference_pressure_pa, label="arc film"
+        )
 
     force_x = -radius_m * length_m * float(np.trapezoid(pressure * cos_b, dx=d_beta))
     force_y = -radius_m * length_m * float(np.trapezoid(pressure * sin_b, dx=d_beta))

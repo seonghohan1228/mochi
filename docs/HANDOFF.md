@@ -81,7 +81,15 @@ section + `results/` figure + tests**, cross-checked against earlier rungs.
   oil/refrigerant **solubility** model — bush loss 48.7 W vs 6.2 W across the plausible span);
   GT surface parameters. Rotor EOM, bush multibody, rotor–cylinder contact rung, gas-pressure
   film BCs (both films), and mixed lubrication all exist now.
-- **Validation vs Pan et al. 2022 (2026-08) — anchor only, never a fit target.** Different
+- **Pan et al. 2022 (2026-08) — VALIDATED NOTHING; it only prompted the question.** Every
+  finding of the bush-film revision rested on internal evidence (absolute pressure at
+  −11.6 MPa, our own §3.3 groove geometry, the attitude moment balance, clamp sensitivity),
+  and the one number that "transferred" — the journal's ω² speed exponent — follows from
+  bearing theory, not from Pan. Its loss split covers eight channels of a different machine
+  against our three, so it cannot judge any term here. **The reference that did validate is
+  Tanaka 2002/2008** (`docs/reference_bush_validation.md`): measured film thickness, a
+  kinematics check that passes, and a quantitative disagreement that does not. Kept below for
+  the record of what was compared. Different
   machine (valveless swing, 10.34cc) at different pressures, so absolute per-channel losses
   do not transfer; mechanism differences make the efficiency gap unpredictable. What *did*
   transfer: our **journal speed exponent 1.92 vs their 2.00**, and our seal/journal magnitudes

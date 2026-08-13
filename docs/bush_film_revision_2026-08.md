@@ -4,12 +4,32 @@ Record of a review of the swing-bush oil films, triggered by comparing the coupl
 model against Pan et al. (2022) and ending in one genuine bug fix, two physics additions, and
 several negative results worth not repeating.
 
-**Status of the reference figure**: Pan 2022 is a *different machine* (valveless swing
-compressor, swing rod on the rotor, bush in the cylinder, 10.34 cc) at different pressures
-(0.867/2.542 MPa vs our 0.820/3.240 MPa) and a different refrigerant model. Its numbers are
-used here **only as an order-of-magnitude anchor and a plausibility band** — never as a target
-to tune to. Mechanism differences make absolute mechanical efficiency unpredictable across
-the two machines, so no parameter in this repo was fitted to reproduce a Pan value.
+**Status of the reference figure — Pan 2022 validated nothing.** It is worth saying plainly,
+because the framing above ("against Pan et al. 2022") overstates its role. Pan is a *different
+machine* (valveless swing compressor, swing rod on the rotor, bush in the cylinder, 10.34 cc)
+at different pressures and with a different refrigerant model, and it reports a loss split
+over eight channels of which this model covers three. Nothing in it can judge a term in our
+model.
+
+What it did was **prompt a question** — "is 91 W reasonable?" — and every finding below then
+rested on internal evidence:
+
+| finding | evidence | needed Pan? |
+|---|---|---|
+| cavitation bug | total **absolute** pressure at −11.6 MPa | no |
+| curved-film gas BC missing | our own PHYSICS.md 3.3 geometry | no |
+| Greenwood-Tripp vs the hard clamp | clamp sensitivity, section 5 | no |
+| thin curved film is a load-path result | the attitude moment balance | no |
+| journal runs full-film (Λ≈11) | film thickness vs roughness | no |
+
+Even the prompt was not unique to Pan: "can the absolute pressure be −11.6 MPa" is a check
+this repo could have run against itself at any time, and section 7 now does. The real
+lesson of the episode is that the model lacked an internal physical-plausibility check, not
+that it lacked an external reference.
+
+The reference that *did* validate something is Tanaka (2002/2008) —
+`docs/reference_bush_validation.md` — which supplies measured film thickness, passes a
+quantitative kinematics check, and pins a quantitative disagreement.
 
 ---
 
@@ -110,6 +130,33 @@ Isolation run: switching the curved asperity off makes things *worse* (bush 48.7
 1800 rpm), because the piece then runs into the hard clamp at `ecc/gap = 0.99`, mispositions,
 and loads the flat film harder. The curved asperity stays on.
 
+**Why the contact model was needed at all** (measured on our machine, no external reference).
+There is no measured film for this compressor, so "accuracy" cannot be scored. What can be
+measured is how much of the answer a *numerical* constant decides. `_MAX_ARC_ECC_RATIO` is a
+solver guard with no physical content, and the curved film sits against it. Running the same
+3-option configuration with the contact model off, and moving that guard over its range:
+
+| | bush W | min curved film | min flat film | ecc ratio |
+|---|---|---|---|---|
+| **Greenwood-Tripp contact** | 6.15 | **0.583 µm** | **0.890 µm** | **1.33** |
+| clamp only, 0.99 | 4.90 | 0.300 µm | 0.200 µm | **82.8** |
+| clamp only, 0.95 | 4.63 | 1.500 µm | 0.200 µm | **100.7** |
+| clamp only, 0.999 | 8.30 | 0.030 µm | 0.200 µm | **79.5** |
+
+Moving an arbitrary constant from 0.95 to 0.999 swings the bush loss by **79 %** and the
+minimum curved film by **4900 %** (0.030 → 1.500 µm) — and the minimum film is what decides
+wear margin. Worse, with no contact reaction the eccentricity ratio runs to **80–100**: the
+piece drives a hundred clearances into the groove, and the clamp only hides it because it is
+applied to what the film solver is handed rather than to the state. The flat film meanwhile
+pins at exactly 0.200 µm in all three — its `_MIN_FLAT_FILM_FRACTION` floor, not a result.
+
+With Greenwood-Tripp the contact carries a real reaction, the eccentricity settles at 1.33,
+the flat film leaves its floor, and none of it depends on the guard. GT has its own spread
+(±16 % over the literature `beta` range) but those parameters are measurable with a
+profilometer, which the clamp value never was. The friction *totals* are similar either way
+(4.6–8.3 vs 6.15 W); the difference is in the kinematics, which is what wear and attitude
+predictions rest on.
+
 `beta` sensitivity (5/10/20/40 um) moves the bush loss over 66-91 W non-monotonically — the
 remaining parameter uncertainty, to be pinned by a surface measurement.
 
@@ -130,6 +177,26 @@ For scale only (not a target): Pan's swing-rod-bush loss scaled by displacement 
 1800 rpm, ~19.7 W if also scaled by the pressure difference. Our result brackets that band
 from above (48.7 W) before the floor change and from below (6.2 W) after it, which is the
 honest statement of where the model stands.
+
+## 6.1 The check that should have caught it — `mochi.physical_checks`
+
+The cavitation bug ran undetected for as long as the gas boundary existed, and surfaced only
+because an external comparison prompted someone to look. Yet the evidence was internal the
+whole time: a field at −11.6 MPa absolute is impossible on its own terms. A solver returning
+such a field should say so, so now it can.
+
+`mochi.physical_checks` holds assertions over quantities whose valid range comes from physics
+rather than from tuning: absolute pressure against the lubricant's vapour pressure (referenced
+to the immersion, so a −1 MPa *gauge* field is fine at 4 MPa immersion and impossible at
+absolute), film thickness against interpenetration, eccentricity ratio against the clearance,
+and dissipated power against sign. `flat_slider_film` and `arc_film_force` take
+`check_physical=True` plus `reference_pressure_pa`; they default off because a coupled orbit
+evaluates these films tens of thousands of times, and are meant to be switched on when a
+configuration is new or a number is surprising.
+
+`tests/test_physical_checks.py` reconstructs the 2026-08 state and asserts it is rejected
+(`absolute pressure reaches -11.555 MPa`), that the current cavitation floor passes it, and
+that the validated pure-hydrodynamic path does not false-positive.
 
 ## 7. Negative results (do not repeat)
 
