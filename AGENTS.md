@@ -136,6 +136,40 @@ Do not commit virtual environments, caches, coverage output, local editor
 settings, generated `results/`, or large simulation artifacts. Reference data
 must be small, intentional, traceable, and stored under `tests/data/`.
 
+### `results/` figures: keep only the latest render
+
+`results/` is git-ignored and never shared, so it must never accumulate a
+figure that pictures a superseded geometry. The rule is that every image in
+`results/` is a current render, and anything that is not is removed rather than
+kept "just in case."
+
+- `scripts/generate_results.py` is the single source of truth for the gallery.
+  Each figure is one renderer in its `FIGURES` registry, rendered from the
+  current `mochi` geometry and physics, so after any geometry or model change
+  the figures are regenerated, not edited by hand. It needs the plotting extra:
+  `python -m pip install -e ".[viz]"`.
+- The script's manifest (`GENERATED_FIGURES`) is the figures it produces plus a
+  short, explicit `PENDING_LEGACY_FIGURES` list of older hand-made figures that
+  are kept until their renderers are ported. `python scripts/generate_results.py
+  --prune` regenerates the produced set and deletes every image *not* in the
+  manifest; without `--prune` those are only listed. Because `results/` is not
+  shared, deleting an unmanifested render loses nothing reproducible.
+- Port legacy figures into `FIGURES` one at a time: add the renderer, remove the
+  filename from `PENDING_LEGACY_FIGURES`. When a legacy figure is obsolete
+  rather than portable, drop it from `PENDING_LEGACY_FIGURES` so `--prune`
+  reclaims it. A figure with no renderer and not on the pending list is, by
+  definition, neither reproducible nor current.
+- **Plotting conventions (`docs/plotting_conventions.md`), standing user
+  requirements — do not regress:** (1) **one plot per figure** — a single
+  Matplotlib axes per file, never a multi-panel montage; split a many-view topic
+  into several files. (2) **Group same-topic figures in one `results/<topic>/`
+  folder.** (3) **Annotations must not obscure the graph** — legends outside the
+  axes (`_legend_above`) or in an empty corner, callouts in empty regions with a
+  leader arrow, never on the curves. (4) **Grid/convergence tests** are presented
+  as a **grid-count vs relative-error** graph (error vs the finest grid, log y),
+  **one channel/quantity per figure** (never several on one axes) and **monochrome
+  (black)**, in `results/convergence/`, with the table in a summary file.
+
 ## Definition of done
 
 A change is complete when the intended behavior is implemented, relevant tests

@@ -18,6 +18,24 @@ class RotaryGeometry:
     vane_width_m: float
     vane_tip_distance_at_top_m: float
     frequency_hz: float
+    # Axial cylinder height supplied by the collaborators (2026-07-16); used
+    # to turn chamber cross-section areas into volumes.
+    cylinder_height_m: float = 21.0 * MM
+    # Port timing supplied by the collaborators (2026-07-20), measured from
+    # the vane centerline in the crank-angle sense (positive y toward
+    # positive x). See PHYSICS.md section 3.4; these are independent supplied
+    # numbers, not values derived from the vane width.
+    suction_seal_angle_deg: float = 10.4
+    compression_start_angle_deg: float = 27.7
+    discharge_port_span_deg: float = 7.2
+    recompression_angle_deg: float = 13.2
+    # Stress-relief blend filleting each vane flank into the cylinder bore
+    # (supplied 2026-07-23). See PHYSICS.md section 3.3.
+    vane_cylinder_fillet_m: float = 2.1 * MM
+    # Round on each corner of the fixed vane tip: the flank runs straight to
+    # y_tip + this radius, then a quarter-circle to the tip flat. See
+    # PHYSICS.md section 3.3.
+    vane_tip_fillet_m: float = 1.5 * MM
 
     @classmethod
     def default(cls) -> "RotaryGeometry":
@@ -32,6 +50,13 @@ class RotaryGeometry:
             vane_width_m=8.0 * MM,
             vane_tip_distance_at_top_m=9.0 * MM,
             frequency_hz=30.0,
+            cylinder_height_m=21.0 * MM,
+            suction_seal_angle_deg=10.4,
+            compression_start_angle_deg=27.7,
+            discharge_port_span_deg=7.2,
+            recompression_angle_deg=13.2,
+            vane_cylinder_fillet_m=2.1 * MM,
+            vane_tip_fillet_m=1.5 * MM,
         )
 
     @property
@@ -66,6 +91,13 @@ class RotaryGeometry:
             self.vane_width_m,
             self.vane_tip_distance_at_top_m,
             self.frequency_hz,
+            self.cylinder_height_m,
+            self.suction_seal_angle_deg,
+            self.compression_start_angle_deg,
+            self.discharge_port_span_deg,
+            self.recompression_angle_deg,
+            self.vane_cylinder_fillet_m,
+            self.vane_tip_fillet_m,
         )
         if not all(isfinite(value) for value in values):
             raise ValueError("All geometry and speed values must be finite.")
@@ -93,6 +125,29 @@ class RotaryGeometry:
             )
         if self.frequency_hz <= 0.0:
             raise ValueError("Frequency must be positive.")
+        if self.cylinder_height_m <= 0.0:
+            raise ValueError("Cylinder height must be positive.")
+        port_angles = (
+            self.suction_seal_angle_deg,
+            self.compression_start_angle_deg,
+            self.discharge_port_span_deg,
+            self.recompression_angle_deg,
+        )
+        if any(angle <= 0.0 for angle in port_angles):
+            raise ValueError("Port timing angles must be positive.")
+        if self.suction_seal_angle_deg >= self.compression_start_angle_deg:
+            raise ValueError("Suction must open before compression starts.")
+        discharge_open_deg = 360.0 - self.recompression_angle_deg - self.discharge_port_span_deg
+        if discharge_open_deg <= self.compression_start_angle_deg:
+            raise ValueError("Discharge port must open after compression starts.")
+        if self.vane_cylinder_fillet_m <= 0.0:
+            raise ValueError("Vane-cylinder blend radius must be positive.")
+        if 2.0 * self.vane_cylinder_fillet_m >= self.cylinder_radius_m - 0.5 * self.vane_width_m:
+            raise ValueError("Vane-cylinder blend radius is too large to meet the bore.")
+        if self.vane_tip_fillet_m <= 0.0:
+            raise ValueError("Vane-tip round radius must be positive.")
+        if 2.0 * self.vane_tip_fillet_m >= self.vane_width_m:
+            raise ValueError("Vane-tip round radius is too large to leave a tip flat.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,12 +165,14 @@ class PrescribedState:
 def prescribed_state(geometry: RotaryGeometry, crank_angle_rad: float) -> PrescribedState:
     """Evaluate the constrained rotor and circular-cutout position.
 
-    Angle zero places the rotor at the top of its orbit. Positive angle advances
-    clockwise. The circular-cutout center remains on the fixed vertical vane
-    axis. An invisible rotor-fixed reference line prescribes the vane tip. The
-    supplied
-    tip distance is therefore a calibration at the top position, not a constant
-    distance throughout the cycle.
+    Angle zero (top dead center) places the rotor at the top of its orbit.
+    Positive angle advances clockwise. The circular-cutout center remains on
+    the fixed vertical vane axis. The stepped vane is integral with the
+    cylinder, so its tip is fixed in the global frame; the supplied tip
+    distance is the rotor-center-to-tip distance at top dead center, which
+    places the tip at y = eccentricity + tip distance at every crank angle.
+    The apparent planar overlap with the rotor silhouette is resolved by the
+    axial stepped structure (PHYSICS.md section 3.3).
     """
 
     geometry.validate()
@@ -129,16 +186,7 @@ def prescribed_state(geometry: RotaryGeometry, crank_angle_rad: float) -> Prescr
     cutout_y = rotor_y + vertical_to_cutout
     orientation = atan2(vertical_to_cutout, horizontal_to_axis)
 
-    axis_x = horizontal_to_axis / geometry.cutout_offset_m
-    axis_y = vertical_to_cutout / geometry.cutout_offset_m
-    normal_x = -axis_y
-    normal_y = axis_x
-    reference_center_x = rotor_x + geometry.vane_tip_distance_at_top_m * axis_x
-    reference_center_y = rotor_y + geometry.vane_tip_distance_at_top_m * axis_y
-    if abs(normal_x) < 1.0e-12:
-        raise ValueError("Vane reference line cannot intersect the vertical vane axis.")
-    distance_along_reference = -reference_center_x / normal_x
-    vane_tip_y = reference_center_y + distance_along_reference * normal_y
+    vane_tip_y = eccentricity + geometry.vane_tip_distance_at_top_m
     vane_tip = (0.0, vane_tip_y)
     vane_length = geometry.cylinder_radius_m - vane_tip_y
 
@@ -163,6 +211,52 @@ def port_position(
         cylinder_radius_m * sin(angle),
         cylinder_radius_m * cos(angle),
     )
+
+
+def vane_fillet_geometry(
+    geometry: RotaryGeometry,
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+    """Right-side vane-root blend: ``(centre, flank_tangent, bore_tangent)``.
+
+    The blend of radius ``vane_cylinder_fillet_m`` is tangent to the vane
+    flank at ``x = +vane_width / 2`` and internally tangent to the bore. Its
+    centre therefore sits one blend radius outside the flank and one blend
+    radius inside the bore. The left-side blend is the mirror image across
+    the vane centreline. Points are global metres.
+    """
+
+    fillet_m = geometry.vane_cylinder_fillet_m
+    half_width_m = 0.5 * geometry.vane_width_m
+    bore_m = geometry.cylinder_radius_m
+    centre_x = half_width_m + fillet_m
+    centre_y = sqrt((bore_m - fillet_m) ** 2 - centre_x**2)
+    flank_tangent = (half_width_m, centre_y)
+    scale = bore_m / (bore_m - fillet_m)
+    bore_tangent = (centre_x * scale, centre_y * scale)
+    return (centre_x, centre_y), flank_tangent, bore_tangent
+
+
+def vane_tip_round(
+    geometry: RotaryGeometry,
+) -> tuple[float, float, tuple[float, float], tuple[float, float]]:
+    """Right-corner vane-tip round: ``(tip_y, flank_top, centre, tip_tangent)``.
+
+    Each corner of the fixed vane tip is rounded by ``vane_tip_fillet_m``: the
+    flank at ``x = +vane_width / 2`` runs straight down to ``flank_top = y_tip +
+    R``, then a quarter-circle of radius ``R`` curves in to the tip flat at
+    ``y_tip``, tangent there at ``x = +(vane_width / 2 - R)``. Returns the tip
+    ``y`` (from :func:`prescribed_state`, fixed in the global frame), the straight
+    flank's lowest ``y`` (``flank_top``), the arc centre, and the tip-flat tangent
+    point. The left corner is the mirror across ``x = 0``. Global metres.
+    """
+
+    radius_m = geometry.vane_tip_fillet_m
+    half_width_m = 0.5 * geometry.vane_width_m
+    tip_y = geometry.eccentricity_m + geometry.vane_tip_distance_at_top_m
+    flank_top = tip_y + radius_m
+    centre = (half_width_m - radius_m, flank_top)
+    tip_tangent = (half_width_m - radius_m, tip_y)
+    return tip_y, flank_top, centre, tip_tangent
 
 
 def distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:

@@ -221,3 +221,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Reference papers and page renders: copyrighted third-party PDFs, and images
+# regenerable from them. The digitised data (refs/*.csv, *.npy) IS tracked.
+/ja.pdf
+/viewcontent.cgi.pdf
+/refs/*.pdf
+/refs/*.png
