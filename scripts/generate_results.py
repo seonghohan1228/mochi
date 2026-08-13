@@ -34,10 +34,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
-from math import atan2, cos, degrees, hypot, pi, radians, sin, sqrt
+from math import atan2, cos, degrees, hypot, log, pi, radians, sin, sqrt
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 
@@ -46,15 +47,20 @@ from matplotlib import font_manager
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Arc, Rectangle, Wedge
 
+from mochi.arc_film import arc_film_force
 from mochi.bearing_load import mechanism_load, shaft_work_j
 from mochi.bush_film import (
+    AXIAL_CLEARANCE_M,
     LUBRICANT_VISCOSITY_PA_S,
     curved_slide_velocity,
     film_state,
     film_thicknesses_m,
+    flat_contact_length_m,
     flat_slide_velocity,
     friction_power_cycle_w,
 )
+from mochi.bush_outline import bush_piece_outline_mm as _bush_outline_mm
+from mochi.bush_outline import vane_outline_mm as _vane_outline_mm
 from mochi.chamber_volume import AxialBands, SwingBush, clearance_volume_m3
 from mochi.chambers import (
     DISCHARGE_PORT_PRESSURE_PA,
@@ -81,6 +87,7 @@ from mochi.kinematics import (
     vane_fillet_geometry,
 )
 from mochi.leakage import SUCTION_DENSITY_KG_M3, leaky_cycle
+from mochi.long_bearing import long_bearing_load
 from mochi.ocvirk_bearing import eccentricity_cycle, short_bearing_force
 from mochi.ports import (
     characteristic_angles,
@@ -90,12 +97,19 @@ from mochi.ports import (
 )
 from mochi.reed_valve import valved_cycle
 from mochi.reynolds_1d import solve_short_bearing_1d
+from mochi.rotor_bush_dynamics import integrate_rotor_bush_orbit
+from mochi.rotor_cylinder import contact_normal_force_n, rotor_cylinder_friction_power_w
 from mochi.rotor_dynamics import integrate_rotor_orbit
 from mochi.rotor_profile import rotor_contour
+from mochi.slider_film import flat_slider_film
+from mochi.tecplot import point_zone, write_dat
 from mochi.thermo_check import isentropic_cross_check
 from mochi.true_gas_force import true_gas_load, true_gas_torque_work_j
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
+# Raw model data (Tecplot ASCII .dat) for research post-processing. The PNGs under
+# results/ are for illustration; the numbers behind them live here (see DATASETS).
+DATA_DIR = RESULTS_DIR / "data"
 
 MPA = 1.0e6
 PA_TO_MPA = 1.0 / MPA
@@ -336,99 +350,6 @@ def render_chamber_pressures(curve: PressureCurve, path: Path) -> None:
 # --------------------------------------------------------------------------
 # Figure 2: rotor motion animation
 # --------------------------------------------------------------------------
-
-
-def _bush_outline_mm(
-    centre_x_m: float, groove_y_m: float, side: float
-) -> tuple[list[float], list[float]]:
-    """One swing-bush piece outline, mirroring ``gui._draw_swing_bush``."""
-
-    bush = SwingBush()
-    radius = bush.piece_outer_radius_m
-    fillet = bush.fillet_radius_m
-    half_arc = bush.half_arc_rad()
-    corner_x = bush.flat_offset_m + fillet
-    corner_y = sqrt((radius - fillet) ** 2 - corner_x**2)
-    fillet_start = atan2(radius * sin(half_arc) - corner_y, radius * cos(half_arc) - corner_x)
-    xs: list[float] = []
-    ys: list[float] = []
-
-    def push(x_m: float, y_m: float) -> None:
-        xs.append(x_m / MM)
-        ys.append(y_m / MM)
-
-    arc_steps = 41
-    fillet_steps = 8
-    for index in range(arc_steps):
-        angle = -half_arc + 2.0 * half_arc * index / (arc_steps - 1)
-        push(centre_x_m + side * radius * cos(angle), groove_y_m + radius * sin(angle))
-    for index in range(1, fillet_steps + 1):
-        angle = fillet_start + (pi - fillet_start) * index / fillet_steps
-        push(
-            centre_x_m + side * (corner_x + fillet * cos(angle)),
-            groove_y_m + corner_y + fillet * sin(angle),
-        )
-    push(centre_x_m + side * bush.flat_offset_m, groove_y_m + corner_y)
-    push(centre_x_m + side * bush.flat_offset_m, groove_y_m - corner_y)
-    for index in range(1, fillet_steps + 1):
-        angle = pi + (pi - fillet_start) * index / fillet_steps
-        push(
-            centre_x_m + side * (corner_x + fillet * cos(angle)),
-            groove_y_m - corner_y + fillet * sin(angle),
-        )
-    return xs, ys
-
-
-def _vane_outline_mm(
-    geometry: RotaryGeometry, vane_tip_y_m: float
-) -> tuple[list[float], list[float]]:
-    """Vane tongue with rounded roots, mirroring ``gui._draw_cylinder_vane_outline``."""
-
-    bore = geometry.cylinder_radius_m
-    half_width = 0.5 * geometry.vane_width_m
-    fillet = geometry.vane_cylinder_fillet_m
-    (centre_x, centre_y), _, (bore_x, bore_y) = vane_fillet_geometry(geometry)
-    blend_points = 16
-    xs: list[float] = []
-    ys: list[float] = []
-
-    def push(x_m: float, y_m: float) -> None:
-        xs.append(x_m / MM)
-        ys.append(y_m / MM)
-
-    # Right blend, bore tangent down to the flank tangent.
-    right_start = atan2(bore_y - centre_y, bore_x - centre_x)
-    for index in range(blend_points + 1):
-        angle = right_start + (pi - right_start) * index / blend_points
-        push(centre_x + fillet * cos(angle), centre_y + fillet * sin(angle))
-    # Down the right flank to the R1.5 tip round, across the shortened tip flat
-    # (width vane_width - 2R), up the left flank.
-    radius = geometry.vane_tip_fillet_m
-    flank_top = vane_tip_y_m + radius
-    inner = half_width - radius
-    arc_steps = 8
-    push(half_width, flank_top)
-    for index in range(1, arc_steps + 1):
-        angle = -0.5 * pi * index / arc_steps
-        push(inner + radius * cos(angle), flank_top + radius * sin(angle))
-    for index in range(arc_steps + 1):
-        angle = -0.5 * pi - 0.5 * pi * index / arc_steps
-        push(-inner + radius * cos(angle), flank_top + radius * sin(angle))
-    # Left blend, flank tangent up to the bore tangent (same traversal order as
-    # gui._draw_cylinder_vane_outline; a reversed sweep here folded the left
-    # root back on itself and drew a hooked sliver).
-    left_end = atan2(bore_y - centre_y, centre_x - bore_x)
-    for index in range(blend_points + 1):
-        angle = left_end * index / blend_points
-        push(-centre_x + fillet * cos(angle), centre_y + fillet * sin(angle))
-    # Short bore arc across the top, left tangent back to the right tangent.
-    right_bore_az = atan2(bore_y, bore_x)
-    left_bore_az = pi - right_bore_az
-    top_steps = 24
-    for index in range(top_steps + 1):
-        angle = left_bore_az + (right_bore_az - left_bore_az) * index / top_steps
-        push(bore * cos(angle), bore * sin(angle))
-    return xs, ys
 
 
 def _phase_label(geometry: RotaryGeometry, angle_deg: float) -> str:
@@ -6962,6 +6883,1066 @@ def render_thermo_crosscheck(curve: PressureCurve, path: Path) -> None:
 # renderer needs the shared port-timed pressure trace and "geometry" when the
 # static geometry is enough. Add a renderer here (and it is regenerated and
 # kept by --prune); legacy figures are ported into this table one at a time.
+def _reynolds_curved_data(geometry: RotaryGeometry) -> dict:
+    """Bush curved film: 1-D ``arc_film`` load vs the long-bearing reference over ε.
+
+    Shared by the ``reynolds_curved`` figure and its ``.dat`` export.
+    """
+
+    bush = SwingBush()
+    radius = bush.piece_outer_radius_m
+    height = geometry.cylinder_height_m - 2.0 * AXIAL_CLEARANCE_M
+    curved_gap = geometry.cutout_radius_m - radius
+    entrain, visc = 50.0, LUBRICANT_VISCOSITY_PA_S
+    eps = [0.1 + 0.05 * i for i in range(17)]
+    arc_mag, lb_mag = [], []
+    for e in eps:
+        arc = arc_film_force(
+            -e * curved_gap,
+            0.0,
+            0.0,
+            0.0,
+            entrain,
+            arc_center_rad=pi / 2,
+            arc_half_span_rad=pi / 2,
+            radius_m=radius,
+            length_m=height,
+            clearance_m=curved_gap,
+            viscosity_pa_s=visc,
+            n_beta=2001,
+        )
+        ref = long_bearing_load(
+            e,
+            entrain,
+            radius_m=radius,
+            length_m=height,
+            clearance_m=curved_gap,
+            viscosity_pa_s=visc,
+            condition="half",
+        )
+        arc_mag.append(hypot(arc.force_x_n, arc.force_y_n))
+        lb_mag.append(ref.magnitude_n)
+    err = max(abs(a - b) / b for a, b in zip(arc_mag, lb_mag, strict=True))
+    return {"eps": eps, "arc_mag": arc_mag, "lb_mag": lb_mag, "err": err}
+
+
+def _reynolds_flat_data(geometry: RotaryGeometry) -> dict:
+    """Bush flat film: 1-D ``slider_film`` load vs the fixed-incline slider over the tilt."""
+
+    height = geometry.cylinder_height_m - 2.0 * AXIAL_CLEARANCE_M
+    visc = LUBRICANT_VISCOSITY_PA_S
+    lf, cf, u = 11.0e-3, 10.0e-6, 0.86
+    tilts = [1.0e-4 + (5.0e-4) * i / 15 for i in range(16)]
+    sld, inc = [], []
+    for g in tilts:
+        f = flat_slider_film(
+            0.0, -g, 0.0, 0.0, u, length_m=lf, height_m=height, clearance_m=cf, n_s=4001
+        )
+        h1, h0 = cf + 0.5 * lf * g, cf - 0.5 * lf * g
+        a = h1 / h0
+        w = (
+            (6.0 * visc * u * lf**2)
+            / ((a - 1.0) ** 2 * h0**2)
+            * (log(a) - 2.0 * (a - 1.0) / (a + 1.0))
+        )
+        sld.append(f.normal_force_n)
+        inc.append(w * height)
+    err = max(abs(a - b) / b for a, b in zip(sld, inc, strict=True))
+    return {"tilts": tilts, "sld": sld, "inc": inc, "err": err}
+
+
+def _reynolds_journal_data() -> dict:
+    """Journal film: 1-D numerical Reynolds load vs the Ocvirk short bearing over ε."""
+
+    epsj = [0.05 + 0.05 * i for i in range(18)]
+    ocv = [short_bearing_force(e, 95.0).magnitude_n for e in epsj]
+    num = [solve_short_bearing_1d(e, 95.0).magnitude_n for e in epsj]
+    err = max(abs(n - o) / o for n, o in zip(num, ocv, strict=True))
+    return {"epsj": epsj, "ocv": ocv, "num": num, "err": err}
+
+
+def render_film_reynolds_curved(geometry: RotaryGeometry, path: Path) -> None:
+    """Bush curved film: 1-D ``arc_film`` vs the long-bearing Sommerfeld load (§4.11).
+
+    The axial-uniform arc-film reduction reproduces the closed-form long-bearing load to
+    ~1e-4 across the eccentricity range. (One of three 1-D-Reynolds validity figures — see
+    also ``reynolds_flat_vs_incline_slider`` and ``reynolds_journal_vs_ocvirk``.)
+    """
+
+    blue, red = "#2166ac", "#c0392b"
+    d = _reynolds_curved_data(geometry)
+    eps, arc_mag, lb_mag, err_curved = d["eps"], d["arc_mag"], d["lb_mag"], d["err"]
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.6), dpi=140)
+    ax.grid(True, which="both", color="#e2e5ea", lw=0.7)
+    ax.semilogy(eps, lb_mag, "-", color=blue, lw=2.2, label="long-bearing 해석해 (§4.11)")
+    ax.semilogy(
+        eps, arc_mag, "o", color=red, ms=6, mfc="none", mew=1.6, label="1-D Reynolds arc_film"
+    )
+    ax.set_xlabel("편심비 ε")
+    ax.set_ylabel("|F| (N)")
+    ax.set_title(
+        f"부시 곡면 유막 — arc_film vs long-bearing (§4.11)\n최대 상대오차 {err_curved:.1e}",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def render_film_reynolds_flat(geometry: RotaryGeometry, path: Path) -> None:
+    """Bush flat film: 1-D ``slider_film`` vs the Reynolds fixed-incline slider (§4.11).
+
+    The 1-D pad reduction reproduces the closed-form fixed-incline slider load to ~1e-4
+    across the wedge-tilt range. (See also ``reynolds_curved_vs_long_bearing`` and
+    ``reynolds_journal_vs_ocvirk``.)
+    """
+
+    blue, red = "#2166ac", "#c0392b"
+    d = _reynolds_flat_data(geometry)
+    tilts, sld, inc, err_flat = d["tilts"], d["sld"], d["inc"], d["err"]
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.6), dpi=140)
+    ax.grid(True, which="both", color="#e2e5ea", lw=0.7)
+    ax.plot([t * 1e3 for t in tilts], inc, "-", color=blue, lw=2.2, label="Reynolds 경사판 해석해")
+    ax.plot(
+        [t * 1e3 for t in tilts],
+        sld,
+        "o",
+        color=red,
+        ms=6,
+        mfc="none",
+        mew=1.6,
+        label="1-D Reynolds slider_film",
+    )
+    ax.set_xlabel("쐐기 기울기 |γ| (×1e-3 rad)")
+    ax.set_ylabel("법선 하중 (N)")
+    ax.set_title(
+        f"부시 평면 유막 — slider_film vs 경사판 (§4.11)\n최대 상대오차 {err_flat:.1e}",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def render_film_reynolds_journal(geometry: RotaryGeometry, path: Path) -> None:
+    """Journal film: 1-D numerical Reynolds vs the Ocvirk short bearing (§4.12).
+
+    The 1-D short-bearing solve reproduces the closed-form Ocvirk load to ~1e-4 across the
+    eccentricity range. (See also ``reynolds_curved_vs_long_bearing`` and
+    ``reynolds_flat_vs_incline_slider``.)
+    """
+
+    blue, red = "#2166ac", "#c0392b"
+    d = _reynolds_journal_data()
+    epsj, ocv, num, err_jrnl = d["epsj"], d["ocv"], d["num"], d["err"]
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.6), dpi=140)
+    ax.grid(True, which="both", color="#e2e5ea", lw=0.7)
+    ax.semilogy(epsj, ocv, "-", color=blue, lw=2.2, label="Ocvirk 단축 해석해 (§4.9)")
+    ax.semilogy(
+        epsj, num, "o", color=red, ms=6, mfc="none", mew=1.6, label="1-D 수치 Reynolds (§4.12)"
+    )
+    ax.set_xlabel("편심비 ε")
+    ax.set_ylabel("|F| (N)")
+    ax.set_title(
+        f"저널 유막 — 1-D Reynolds vs Ocvirk (§4.12)\n최대 상대오차 {err_jrnl:.1e}",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def _coupled_bush_orbit(curve: PressureCurve):
+    """The coupled 9-DOF rotor+bush orbit (seal_contact=True), computed once and memoised on
+    the curve so the clearance/friction figures share one (expensive) integration.
+
+    Stored on the ``curve`` instance rather than a module-global ``id()`` map: the cache then
+    lives exactly as long as the curve, with no risk of a freed curve's id being reused for a
+    different geometry.
+    """
+
+    orbit = getattr(curve, "_coupled_orbit", None)
+    if orbit is None:
+        print("  integrating the coupled 9-DOF rotor+bush orbit (a few minutes)...")
+        orbit = integrate_rotor_bush_orbit(
+            curve.geometry,
+            revolutions=4,
+            samples=180,
+            grid_samples=180,
+            n_beta=121,
+            n_s=81,
+            trace=curve.trace,
+        )
+        curve._coupled_orbit = orbit
+    return orbit
+
+
+def _clearance_at_angle_state(curve: PressureCurve) -> dict:
+    """Coupled-orbit geometry at the crank angle where the bush curved film is thinnest.
+
+    Shared by the three ``film_clearance_*`` figures (journal, bush curved, bush flat) so the
+    most-loaded instant and its piece/groove positions are computed once per curve.
+    """
+
+    geometry = curve.geometry
+    orbit = _coupled_bush_orbit(curve)
+    bush = SwingBush()
+    flat_gap, _ = film_thicknesses_m(geometry, bush)
+    lever = geometry.cutout_offset_m
+    throw = geometry.eccentricity_m
+
+    jmin = min(
+        range(len(orbit.crank_angle_rad)),
+        key=lambda i: min(orbit.in_curved_film_m[i], orbit.out_curved_film_m[i]),
+    )
+    theta = orbit.crank_angle_rad[jmin]
+    phi_orient = (
+        prescribed_state(geometry, theta).rotor_orientation_rad
+        + orbit.rotor_attitude_deviation_rad[jmin]
+    )
+    e_jx, e_jy = orbit.eccentricity_x_m[jmin], orbit.eccentricity_y_m[jmin]
+    pin = (throw * sin(theta), throw * cos(theta))
+    bore = (pin[0] + e_jx, pin[1] + e_jy)
+    groove = (bore[0] + lever * cos(phi_orient), bore[1] + lever * sin(phi_orient))
+    pieces = (
+        (
+            1.0,
+            orbit.in_piece_x_m[jmin],
+            orbit.in_piece_y_m[jmin],
+            orbit.in_piece_attitude_rad[jmin],
+            "IN",
+        ),
+        (
+            -1.0,
+            orbit.out_piece_x_m[jmin],
+            orbit.out_piece_y_m[jmin],
+            orbit.out_piece_attitude_rad[jmin],
+            "OUT",
+        ),
+    )
+    return {
+        "geometry": geometry,
+        "bush": bush,
+        "half_arc": bush.half_arc_rad(),
+        "curved_gap": geometry.cutout_radius_m - bush.piece_outer_radius_m,
+        "flat_gap": flat_gap,
+        "shift": bush.piece_shift_m,
+        "c_j": orbit.journal_clearance_m,
+        "theta": theta,
+        "e_jx": e_jx,
+        "e_jy": e_jy,
+        "groove": groove,
+        "lf": flat_contact_length_m(geometry, theta, bush),
+        "pieces": pieces,
+    }
+
+
+def render_film_clearance_journal(curve: PressureCurve, path: Path) -> None:
+    """Journal film thickness h(φ) around the circumference at the most-loaded angle (§4.14)."""
+
+    st = _clearance_at_angle_state(curve)
+    c_j, e_jx, e_jy = st["c_j"], st["e_jx"], st["e_jy"]
+    blue, red, grey = "#2166ac", "#c0392b", "#8a8f98"
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.6), dpi=140)
+    ax.grid(True, color="#e2e5ea", lw=0.7)
+    phi = [2.0 * pi * i / 360 for i in range(361)]
+    h_j = [c_j - (e_jx * cos(p) + e_jy * sin(p)) for p in phi]
+    j_arg = min(range(len(h_j)), key=lambda i: h_j[i])
+    ax.plot([degrees(p) for p in phi], [h * 1e6 for h in h_j], "-", color=blue, lw=2.2)
+    ax.axhline(c_j * 1e6, ls="--", color=grey, lw=1.3, label=f"공칭 c_j={c_j * 1e6:.0f} µm")
+    ax.plot(degrees(phi[j_arg]), h_j[j_arg] * 1e6, "v", color=red, ms=9)
+    ax.set_xlabel("원주각 φ (deg)")
+    ax.set_ylabel("유막 두께 h (µm)")
+    ax.set_xlim(0, 360)
+    ax.set_title(
+        f"저널 클리어런스 (θ={degrees(st['theta']):.0f}°) — "
+        f"min {min(h_j) * 1e6:.1f} µm (ε={hypot(e_jx, e_jy) / c_j:.2f})",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def render_film_clearance_bush_curved(curve: PressureCurve, path: Path) -> None:
+    """Bush curved (rotor-groove) film thickness h(β) for both pieces at the loaded angle (§4.14)."""
+
+    st = _clearance_at_angle_state(curve)
+    half_arc, curved_gap, groove = st["half_arc"], st["curved_gap"], st["groove"]
+    grey = "#8a8f98"
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.6), dpi=140)
+    ax.grid(True, color="#e2e5ea", lw=0.7)
+    for side, x_k, y_k, phi_k, tag in st["pieces"]:
+        ecc_x, ecc_y = x_k - groove[0], y_k - groove[1]
+        center = (0.0 if side > 0 else pi) + phi_k
+        beta = [center - half_arc + 2.0 * half_arc * i / 360 for i in range(361)]
+        h_c = [curved_gap - (ecc_x * cos(b) + ecc_y * sin(b)) for b in beta]
+        ax.plot(
+            [degrees(b - center) for b in beta],
+            [h * 1e6 for h in h_c],
+            lw=2.2,
+            label=f"{tag} (min {min(h_c) * 1e6:.2f} µm)",
+        )
+    ax.axhline(
+        curved_gap * 1e6, ls="--", color=grey, lw=1.3, label=f"공칭 gap={curved_gap * 1e6:.0f} µm"
+    )
+    ax.set_xlabel("아크각 (β - 중심) (deg)")
+    ax.set_ylabel("유막 두께 h (µm)")
+    ax.set_title(
+        f"부시 곡면 클리어런스 (두 조각, θ={degrees(st['theta']):.0f}°)",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def render_film_clearance_bush_flat(curve: PressureCurve, path: Path) -> None:
+    """Bush flat (vane) film thickness h(s) for both pieces at the loaded angle (§4.14)."""
+
+    st = _clearance_at_angle_state(curve)
+    flat_gap, shift, lf = st["flat_gap"], st["shift"], st["lf"]
+    grey = "#8a8f98"
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.6), dpi=140)
+    ax.grid(True, color="#e2e5ea", lw=0.7)
+    s_grid = [-0.5 * lf + lf * i / 200 for i in range(201)]
+    for side, x_k, _y_k, phi_k, tag in st["pieces"]:
+        approach = shift - side * x_k
+        h_f = [(flat_gap - approach) + s * phi_k for s in s_grid]
+        ax.plot(
+            [s * 1e3 for s in s_grid],
+            [h * 1e6 for h in h_f],
+            lw=2.2,
+            label=f"{tag} (min {min(h_f) * 1e6:.2f} µm)",
+        )
+    ax.axhline(
+        flat_gap * 1e6, ls="--", color=grey, lw=1.3, label=f"공칭 c_f={flat_gap * 1e6:.0f} µm"
+    )
+    ax.set_xlabel("패드 위치 s (mm)")
+    ax.set_ylabel("유막 두께 h (µm)")
+    ax.set_title(
+        f"부시 평면 클리어런스 (두 조각, θ={degrees(st['theta']):.0f}°)",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def render_friction_dynamic_vs_quasistatic(curve: PressureCurve, path: Path) -> None:
+    """Per-film friction loss: quasi-static vs dynamic/coupled (§4.14/4.15).
+
+    Bush and rotor-cylinder seal roughly triple from quasi-static to dynamic/coupled
+    (thinner loaded films; vane-constraint load transfer); the journal is nearly
+    unchanged (the squeeze film attenuates the peak eccentricity). The seal row is the
+    coupled 9-DOF value (~11 W) vs the rigid quasi-static N_c estimate.
+    """
+
+    geometry = curve.geometry
+    orbit = _coupled_bush_orbit(curve)
+    rotor = integrate_rotor_orbit(geometry, trace=curve.trace)
+    qs_seal = rotor_cylinder_friction_power_w(
+        geometry, lambda th: contact_normal_force_n(geometry, th, trace=curve.trace)
+    )
+    rows = [
+        (
+            "부시\n(곡면+평면)",
+            orbit.quasi_static_bush_friction_power_w,
+            orbit.bush_friction_power_w,
+        ),
+        (
+            "크랭크핀 저널\n(편심)",
+            rotor.quasi_static_journal_friction_w,
+            rotor.dynamic_journal_friction_w,
+        ),
+        ("로터-실린더\n실링", qs_seal, orbit.seal_contact_friction_power_w),
+    ]
+    fig, ax = plt.subplots(figsize=(8.6, 5.2), dpi=140)
+    xs = list(range(len(rows)))
+    w = 0.38
+    qs = [r[1] for r in rows]
+    dyn = [r[2] for r in rows]
+    ax.bar([x - w / 2 for x in xs], qs, w, color="#8a8f98", label="준정적")
+    ax.bar([x + w / 2 for x in xs], dyn, w, color="#c0392b", label="동역학 / 결합")
+    for x, (q, d) in zip(xs, zip(qs, dyn, strict=True), strict=True):
+        ax.text(x - w / 2, q, f"{q:.2f}", ha="center", va="bottom", fontsize=9)
+        ax.text(x + w / 2, d, f"{d:.2f}", ha="center", va="bottom", fontsize=9)
+    ax.set_xticks(xs)
+    ax.set_xticklabels([r[0] for r in rows])
+    ax.set_ylabel("마찰 손실 (W)")
+    total_qs, total_dyn = sum(qs), sum(dyn)
+    # Summary in the title (above the data), not a box over the bars — the "upper left"
+    # corner is empty here since the tallest bars (seal) sit on the right.
+    ax.set_title(
+        "유막별 마찰 손실 — 준정적 vs 동역학/결합 (§4.14/4.15)\n"
+        f"합계 준정적 {total_qs:.1f} W → 동역학 {total_dyn:.1f} W (×{total_dyn / total_qs:.2f})",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.set_ylim(0, 1.22 * max(max(qs), max(dyn)))  # headroom for the tallest bar + label
+    ax.grid(True, axis="y", color="#e2e5ea", lw=0.7)
+    ax.legend(fontsize=10, loc="upper left")
+    _save(fig, path)
+
+
+_ASM_COLORS = {"rotor": "#d9d9d9", "bush": "#aeb8c7", "vane": "#5a5a5a", "pin": "#c9b08a"}
+_ASM_K = 60  # uniform clearance-exaggeration factor shared by the bush and journal views
+
+
+def _assembly_state_42(curve: PressureCurve) -> dict:
+    """Geometry + coupled-orbit state at the most-loaded crank angle (~42 deg), in mm."""
+
+    geometry = curve.geometry
+    orbit = _coupled_bush_orbit(curve)
+    bush = SwingBush()
+    ang = [degrees(a) for a in orbit.crank_angle_rad]
+    j = min(range(len(ang)), key=lambda i: abs(ang[i] - 42.0))
+    thr = orbit.crank_angle_rad[j]
+    state = prescribed_state(geometry, thr)
+    phi = state.rotor_orientation_rad + orbit.rotor_attitude_deviation_rad[j]
+    mm = 1.0 / MM
+    throw = geometry.eccentricity_m * mm
+    pin = np.array([throw * sin(thr), throw * cos(thr)])
+    bore = pin + np.array([orbit.eccentricity_x_m[j], orbit.eccentricity_y_m[j]]) * mm
+    groove = bore + geometry.cutout_offset_m * mm * np.array([cos(phi), sin(phi)])
+    in_op = np.array([orbit.in_piece_x_m[j], orbit.in_piece_y_m[j]]) * mm
+    out_op = np.array([orbit.out_piece_x_m[j], orbit.out_piece_y_m[j]]) * mm
+    return {
+        "geometry": geometry,
+        "bush": bush,
+        "state": state,
+        "mm": mm,
+        "th": ang[j],
+        "Rc": geometry.cylinder_radius_m * mm,
+        "Rr": geometry.rotor_radius_m * mm,
+        "Rpin": 14.2,
+        "cj": 0.015,
+        "rcut": geometry.cutout_radius_m * mm,
+        "vane_half": 0.5 * geometry.vane_width_m * mm,
+        "pin": pin,
+        "bore": bore,
+        "groove": groove,
+        "ej": np.array([orbit.eccentricity_x_m[j], orbit.eccentricity_y_m[j]]) * 1e6,
+        "in_c": orbit.in_curved_film_m[j] * 1e6,
+        "in_f": orbit.in_flat_film_m[j] * 1e6,
+        "out_c": orbit.out_curved_film_m[j] * 1e6,
+        "out_f": orbit.out_flat_film_m[j] * 1e6,
+        "in_op": in_op,
+        "out_op": out_op,
+        "in_phi": orbit.in_piece_attitude_rad[j],
+        "out_phi": orbit.out_piece_attitude_rad[j],
+        "in_ecc": float(np.hypot(*(in_op - groove))) * 1e3,
+        "out_ecc": float(np.hypot(*(out_op - groove))) * 1e3,
+        "in_vx": in_op[0] * 1e3,
+        "out_vx": out_op[0] * 1e3,
+    }
+
+
+def render_assembly_layout(curve: PressureCurve, path: Path) -> None:
+    """Full cross-section at the most-loaded crank angle, true scale (§4.14).
+
+    The arrangement of the journal (crank pin), rotor, fixed vane and the two swing-bush
+    pieces, with the shaft axis O, crank-pin centre O_j, groove centre O_g and the seal
+    contact marked. Clearances are micrometre-scale (invisible here); the bush and journal
+    clearance figures show them exaggerated.
+    """
+
+    s = _assembly_state_42(curve)
+    mm, Rc, Rr, Rpin, cj = s["mm"], s["Rc"], s["Rr"], s["Rpin"], s["cj"]
+    rcut, pin, bore, groove = s["rcut"], s["pin"], s["bore"], s["groove"]
+    c = _ASM_COLORS
+    fig, ax = plt.subplots(figsize=(7.4, 7.0), dpi=140)
+    ax.set_aspect("equal")
+    ax.grid(True, color="#eef0f3", lw=0.6)
+    ax.add_patch(plt.Circle((0, 0), Rc, fill=False, ec="#333", lw=1.6))
+    ax.add_patch(plt.Circle(bore, Rr, facecolor=c["rotor"], ec="#555", lw=1.2))
+    ax.add_patch(plt.Circle(bore, Rpin + cj, facecolor="white", ec="#999", lw=0.7))
+    ax.add_patch(plt.Circle(pin, Rpin, facecolor=c["pin"], ec="#8a7", lw=1.0))
+    vx, vy = _vane_outline_mm(s["geometry"], s["state"].vane_tip_m[1])
+    ax.fill(vx, vy, facecolor=c["vane"], ec="#333", lw=1.0, zorder=5)
+    for side in (1.0, -1.0):
+        bx, by = _bush_outline_mm(
+            groove[0] / mm + side * s["bush"].piece_shift_m, groove[1] / mm, side
+        )
+        ax.fill(bx, by, facecolor=c["bush"], ec="#222", lw=1.0, zorder=4)
+    ax.add_patch(plt.Circle(groove, rcut, fill=False, ec="#c0392b", lw=1.0, ls=":"))
+    for p, name, off in (
+        (np.zeros(2), "O (축)", (1.5, -3.2)),
+        (pin, "O_j", (1.8, -2.6)),
+        (groove, "O_g", (2.6, 0.5)),
+    ):
+        ax.plot(*p, "+", color="k", ms=8, mew=1.4)
+        ax.annotate(name, p, p + np.array(off), fontsize=9)
+    seal = bore + Rr * bore / np.hypot(*bore)
+    ax.annotate(
+        "실링 접촉",
+        seal,
+        seal + np.array([4, 3]),
+        fontsize=9,
+        color="#c0392b",
+        arrowprops={"arrowstyle": "->", "color": "#c0392b"},
+    )
+    ax.annotate("베인(고정)", (0, 34), (12, 36), fontsize=9, color="#333")
+    ax.annotate(
+        "두 부시",
+        groove + np.array([0, 2]),
+        (-20, 24),
+        fontsize=9,
+        color="#333",
+        arrowprops={"arrowstyle": "->", "color": "#333"},
+    )
+    ax.set_xlim(-Rc - 4, Rc + 12)
+    ax.set_ylim(-Rc - 4, Rc + 8)
+    ax.set_xlabel("x (mm)")
+    ax.set_ylabel("y (mm)")
+    ax.set_title(
+        f"θ={s['th']:.0f}° 전체 배치 (실척) — 저널·로터·베인·두 부시",
+        fontsize=12,
+        fontweight="bold",
+    )
+    _save(fig, path)
+
+
+def render_assembly_bush_clearance(curve: PressureCurve, path: Path) -> None:
+    """Bush clearances at the most-loaded angle, exaggerated x60, with the centre offsets.
+
+    The two bush pieces flanking the fixed vane, their curved (rotor-groove) and flat
+    (vane) films exaggerated by a uniform factor, plus the groove centre O_g and the two
+    piece centres O_p marked relative to the vane centre-line. The IN piece is driven onto
+    its groove wall (curved film into near-contact) while the OUT piece stays near-concentric.
+    """
+
+    s = _assembly_state_42(curve)
+    geometry, bush, mmv = s["geometry"], s["bush"], s["mm"]
+    rcut, vane_half, groove = s["rcut"], s["vane_half"], s["groove"]
+    in_c, in_f, out_c, out_f = s["in_c"], s["in_f"], s["out_c"], s["out_f"]
+    in_op, out_op = s["in_op"], s["out_op"]
+    c, kk = _ASM_COLORS, _ASM_K
+    # Rigid caricature: the piece keeps a constant shape (outer radius r_prime = rcut - x60*nominal
+    # gap, arc span, flat height) and only translates to follow O_p (eccentricity x60) / rotates by
+    # phi_k -- so it does not "breathe" and its body sits on O_p, not O_g. The two circles (groove
+    # rcut @ O_g, piece r_prime @ O_p) reproduce the true film x60 as their gap.
+    half_arc = bush.half_arc_rad()
+    curved_gap_mm = (geometry.cutout_radius_m - bush.piece_outer_radius_m) * mmv
+    r_prime = rcut - kk * curved_gap_mm
+    fig, ax = plt.subplots(figsize=(7.6, 7.2), dpi=140)
+    ax.set_aspect("equal")
+    ax.grid(True, color="#eef0f3", lw=0.6)
+    ogx = kk * groove[0]  # O_g offset from the vane centre-line, exaggerated
+    ax.add_patch(plt.Circle((ogx, 0), rcut, fill=False, ec="#c0392b", lw=1.8, zorder=1))
+    ax.add_patch(
+        plt.Rectangle(
+            (-vane_half, -rcut - 1),
+            2 * vane_half,
+            2 * rcut + 2,
+            facecolor=c["vane"],
+            ec="#333",
+            lw=1,
+            zorder=2,
+        )
+    )
+    ax.axvline(0.0, color="#f2c200", ls="--", lw=1.1, zorder=3)  # vane centre-line
+    for side, op, cf, ff, phi_k in (
+        (1.0, in_op, in_c, in_f, s["in_phi"]),
+        (-1.0, out_op, out_c, out_f, s["out_phi"]),
+    ):
+        cx, cy = kk * op[0], kk * (op[1] - groove[1])
+        base = (0.0 if side > 0 else pi) + phi_k
+        ts = np.linspace(-half_arc, half_arc, 80)
+        arc_x = cx + r_prime * np.cos(base + ts)
+        arc_y = cy + r_prime * np.sin(base + ts)
+        fx = side * (vane_half + kk * ff * 1e-3)
+        ax.fill(
+            list(arc_x) + [fx, fx],
+            list(arc_y) + [arc_y[-1], arc_y[0]],
+            facecolor=c["bush"],
+            ec="#222",
+            lw=1.2,
+            zorder=4,
+        )
+        ha = "left" if side > 0 else "right"
+        ax.annotate(
+            f"곡면 {cf:.2f} µm",
+            (cx + r_prime * cos(base), cy + r_prime * sin(base)),
+            (side * (rcut + 0.5), 4.6),
+            fontsize=9,
+            color="#c0392b",
+            ha=ha,
+            arrowprops={"arrowstyle": "->", "color": "#c0392b", "lw": 0.9},
+        )
+        ax.annotate(
+            f"평면 {ff:.2f} µm",
+            (fx, cy - 3.0),
+            (side * (vane_half + 2.4), -6.8),
+            fontsize=9,
+            color="#2166ac",
+            ha=ha,
+            arrowprops={"arrowstyle": "->", "color": "#2166ac", "lw": 0.9},
+        )
+    ax.plot(ogx, 0, "D", color="#111", ms=7, zorder=6)
+    ax.plot(
+        kk * in_op[0],
+        kk * (in_op[1] - groove[1]),
+        "o",
+        color="#2166ac",
+        ms=7,
+        mec="white",
+        zorder=6,
+    )
+    ax.plot(
+        kk * out_op[0],
+        kk * (out_op[1] - groove[1]),
+        "o",
+        color="#e8752a",
+        ms=7,
+        mec="white",
+        zorder=6,
+    )
+    ax.annotate("O_g", (ogx, 0), (ogx - 0.6, 1.6), fontsize=9, ha="right", color="#111")
+    ax.annotate(
+        "O_p(IN)", (kk * in_op[0], 0), (kk * in_op[0] + 0.5, 2.6), fontsize=9, color="#2166ac"
+    )
+    ax.annotate(
+        "O_p(OUT)",
+        (kk * out_op[0], 0),
+        (kk * out_op[0] - 0.5, -2.8),
+        fontsize=9,
+        ha="right",
+        color="#e8752a",
+    )
+    ax.annotate(
+        "베인 중선", (0, rcut + 0.3), (0, rcut + 1.3), fontsize=8.5, ha="center", color="#b38f00"
+    )
+    ax.annotate("베인", (0, -rcut - 0.2), (0, -rcut - 0.9), fontsize=9, color="#eee", ha="center")
+    ax.text(
+        rcut + 0.6,
+        rcut + 1.6,
+        f"IN\nO_p-O_g = {s['in_ecc']:.1f} µm\nO_p-베인 = {s['in_vx']:+.0f} µm",
+        fontsize=8,
+        ha="left",
+        va="top",
+        color="#333",
+        bbox={"boxstyle": "round", "fc": "#fffbe6", "ec": "#d8c98a"},
+    )
+    ax.text(
+        -rcut - 0.6,
+        rcut + 1.6,
+        f"OUT\nO_p-O_g = {s['out_ecc']:.1f} µm\nO_p-베인 = {s['out_vx']:+.0f} µm",
+        fontsize=8,
+        ha="right",
+        va="top",
+        color="#333",
+        bbox={"boxstyle": "round", "fc": "#fffbe6", "ec": "#d8c98a"},
+    )
+    ax.text(
+        0,
+        -rcut - 2.4,
+        f"O_g는 베인 중선에서 {groove[0] * 1e3:+.0f} µm; 중심 치우침 ×{kk} "
+        "표시, 몸체 실척·겹침 없음",
+        fontsize=8,
+        ha="center",
+        va="top",
+        color="#666",
+    )
+    ax.set_xlim(-rcut - 4.5, rcut + 4.5)
+    ax.set_ylim(-rcut - 3.4, rcut + 3.2)
+    ax.set_xlabel("x (mm, 베인 중선 기준)")
+    ax.set_title(
+        f"θ={s['th']:.0f}° 부시 클리어런스 ×{kk} + 중심 치우침(O_p, O_g)",
+        fontsize=12,
+        fontweight="bold",
+    )
+    _save(fig, path)
+
+
+def render_assembly_journal_clearance(curve: PressureCurve, path: Path) -> None:
+    """Crank-pin journal clearance at the most-loaded angle, exaggerated x60 (§4.13).
+
+    The crank pin in the rotor bore, the journal oil film clearance and the pin
+    eccentricity exaggerated by the same factor as the bush-clearance figure.
+    """
+
+    s = _assembly_state_42(curve)
+    Rpin, cj, ej = s["Rpin"], s["cj"], s["ej"]
+    c, kk = _ASM_COLORS, _ASM_K
+    fig, ax = plt.subplots(figsize=(6.8, 6.8), dpi=140)
+    ax.set_aspect("equal")
+    ax.grid(True, color="#eef0f3", lw=0.6)
+    ax.add_patch(plt.Circle((0, 0), Rpin + kk * cj, fill=False, ec="#999", lw=1.8))
+    ax.add_patch(plt.Circle(kk * ej * 1e-3, Rpin, facecolor=c["pin"], ec="#8a7", lw=1.2))
+    ax.plot(0, 0, "+", color="#999", ms=9, mew=1.3)
+    ax.plot(*(kk * ej * 1e-3), "+", color="#7a5", ms=9, mew=1.3)
+    ax.annotate(
+        "로터 보어", (0, Rpin + kk * cj), (0, Rpin + kk * cj + 0.8), fontsize=9, ha="center"
+    )
+    ax.annotate(
+        f"크랭크핀 (편심 {np.hypot(*ej):.1f} µm)",
+        (0, -Rpin),
+        (0, -Rpin - 1.6),
+        fontsize=9,
+        ha="center",
+        color="#7a5",
+    )
+    ax.annotate(
+        f"저널 유막 c_j = {cj * 1e3:.0f} µm",
+        (Rpin, 0),
+        (Rpin + 0.5, 0),
+        fontsize=9,
+        va="center",
+        color="#333",
+    )
+    rr = Rpin + kk * cj + 2.2
+    ax.set_xlim(-rr, rr)
+    ax.set_ylim(-rr, rr)
+    ax.set_xlabel("x (mm, 보어 국소)")
+    ax.set_title(f"θ={s['th']:.0f}° 저널 클리어런스 ×{kk} 과장", fontsize=12, fontweight="bold")
+    _save(fig, path)
+
+
+def _bush_clearance_history(curve: PressureCurve):
+    """Crank angles (sorted, deg) and a per-piece µm-series extractor for the coupled orbit."""
+
+    orbit = _coupled_bush_orbit(curve)
+    ang = [degrees(a) for a in orbit.crank_angle_rad]
+    order = sorted(range(len(ang)), key=lambda i: ang[i])
+    th = [ang[i] for i in order]
+
+    def series(values):
+        return [values[i] * 1e6 for i in order]
+
+    return orbit, th, series
+
+
+def _bush_clearance_axes(ax) -> None:
+    ax.grid(True, color="#e2e5ea", lw=0.7)
+    ax.set_xlim(0, 360)
+    ax.set_xticks(range(0, 361, 90))
+    ax.set_xlabel("크랭크각 θ (deg)")
+    ax.set_ylabel("최소 유막 두께 h (µm)")
+
+
+def render_bush_curved_clearance_vs_crank(curve: PressureCurve, path: Path) -> None:
+    """Bush curved (rotor-groove) min film thickness of each piece over the cycle (§4.14).
+
+    The min-film *history* the single-angle figure only samples at one instant; the IN and
+    OUT pieces alternate as the gas moment reverses, the curved IN film reaching ~0.7 µm.
+    """
+
+    geometry = curve.geometry
+    bush = SwingBush()
+    curved_gap = (geometry.cutout_radius_m - bush.piece_outer_radius_m) * 1e6  # 30 um
+    blue, orange, grey = "#2166ac", "#e8752a", "#8a8f98"
+    orbit, th, series = _bush_clearance_history(curve)
+
+    fig, ax = plt.subplots(figsize=(8.6, 5.4), dpi=140)
+    _bush_clearance_axes(ax)
+    for tag, vals, color in (
+        ("IN", orbit.in_curved_film_m, blue),
+        ("OUT", orbit.out_curved_film_m, orange),
+    ):
+        y = series(vals)
+        ax.plot(th, y, color=color, lw=2.0, label=f"{tag} (min {min(y):.2f} µm)")
+        j = min(range(len(y)), key=lambda i: y[i])
+        ax.plot(th[j], y[j], "v", color=color, ms=8)
+    ax.axhline(curved_gap, ls="--", color=grey, lw=1.3, label=f"공칭 gap {curved_gap:.0f} µm")
+    ax.set_title(
+        "부시 곡면막 (로터 그루브) 클리어런스 이력 — 사이클 전체", fontsize=12, fontweight="bold"
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+def render_bush_flat_clearance_vs_crank(curve: PressureCurve, path: Path) -> None:
+    """Bush flat (vane) min film thickness of each piece over the cycle (§4.14)."""
+
+    geometry = curve.geometry
+    bush = SwingBush()
+    flat_gap = film_thicknesses_m(geometry, bush)[0] * 1e6  # 10 um
+    blue, orange, grey = "#2166ac", "#e8752a", "#8a8f98"
+    orbit, th, series = _bush_clearance_history(curve)
+
+    fig, ax = plt.subplots(figsize=(8.6, 5.4), dpi=140)
+    _bush_clearance_axes(ax)
+    for tag, vals, color in (
+        ("IN", orbit.in_flat_film_m, blue),
+        ("OUT", orbit.out_flat_film_m, orange),
+    ):
+        y = series(vals)
+        ax.plot(th, y, color=color, lw=2.0, label=f"{tag} (min {min(y):.2f} µm)")
+        j = min(range(len(y)), key=lambda i: y[i])
+        ax.plot(th[j], y[j], "v", color=color, ms=8)
+    ax.axhline(flat_gap, ls="--", color=grey, lw=1.3, label=f"공칭 c_f {flat_gap:.0f} µm")
+    ax.set_title(
+        "부시 평면막 (베인) 클리어런스 이력 — 사이클 전체", fontsize=12, fontweight="bold"
+    )
+    ax.legend(fontsize=9)
+    _save(fig, path)
+
+
+# ==========================================================================
+# Raw-data (.dat) export for research post-processing (Tecplot ASCII).
+#
+# The PNGs above are illustration; these functions dump the numbers behind the
+# coupled-orbit and validation figures. Two shapes: 1-D point zones (a quantity
+# vs crank angle / eccentricity) and 2-D ordered surface zones (film thickness
+# over crank-angle x position). Registered in DATASETS, emitted with --data.
+# ==========================================================================
+
+
+def _orbit_common(curve: PressureCurve) -> dict:
+    """Coupled-orbit handle plus the fixed bush/journal geometry the exporters need."""
+
+    geometry = curve.geometry
+    orbit = _coupled_bush_orbit(curve)
+    bush = SwingBush()
+    return {
+        "geometry": geometry,
+        "orbit": orbit,
+        "bush": bush,
+        "half_arc": bush.half_arc_rad(),
+        "curved_gap": geometry.cutout_radius_m - bush.piece_outer_radius_m,
+        "flat_gap": film_thicknesses_m(geometry, bush)[0],
+        "shift": bush.piece_shift_m,
+        "lever": geometry.cutout_offset_m,
+        "throw": geometry.eccentricity_m,
+        "c_j": orbit.journal_clearance_m,
+    }
+
+
+def _orbit_frames(c: dict):
+    """Per-sample crank angle, rotor eccentricity, and groove centre (world), from the orbit.
+
+    Returns arrays sorted by crank angle so the 2-D field zones have a monotonic J-axis.
+    """
+
+    geometry, orbit = c["geometry"], c["orbit"]
+    theta = np.array(orbit.crank_angle_rad)
+    order = np.argsort(theta)
+    theta = theta[order]
+    ejx = np.array(orbit.eccentricity_x_m)[order]
+    ejy = np.array(orbit.eccentricity_y_m)[order]
+    phi = (
+        np.array([prescribed_state(geometry, float(t)).rotor_orientation_rad for t in theta])
+        + np.array(orbit.rotor_attitude_deviation_rad)[order]
+    )
+    bore_x = c["throw"] * np.sin(theta) + ejx
+    bore_y = c["throw"] * np.cos(theta) + ejy
+    groove_x = bore_x + c["lever"] * np.cos(phi)
+    groove_y = bore_y + c["lever"] * np.sin(phi)
+    return {"order": order, "theta": theta, "ejx": ejx, "ejy": ejy, "gx": groove_x, "gy": groove_y}
+
+
+def _write_film_strand(path, x_name, frames, title):
+    """Write one 1-D line zone per crank angle as a Tecplot transient *strand*.
+
+    Each frame is ``(solution_time_s, angle_deg, [x_column, h_um_column])``; every zone shares
+    one STRANDID and carries its own SOLUTIONTIME, so Tecplot animates through crank angle
+    (x = position, y = h_um). Frames with non-increasing solution time (the wrap seam) are
+    skipped so the strand is strictly ordered.
+    """
+
+    # SOLUTIONTIME is the CRANK ANGLE in degrees (not seconds): Tecplot's time slider then
+    # reads the crank angle directly (0..360). Drop frames that collide on the written value
+    # (the revolution wrap seam samples the same crank angle twice, distinct only at ~1e-14),
+    # keying on the printed representation so the strand is strictly increasing.
+    zones = []
+    seen: set[str] = set()
+    for _time_s, angle_deg, columns in frames:
+        key = f"{angle_deg:.9g}"
+        if key in seen:
+            continue
+        seen.add(key)
+        zones.append(
+            point_zone(f"theta_{angle_deg:.1f}deg", columns, strand_id=1, solution_time=angle_deg)
+        )
+    write_dat(path, [x_name, "h_um"], zones, title=title)
+
+
+def data_orbit_film_journal(curve: PressureCurve, path: Path) -> None:
+    """Transient: journal film h(phi) as one line-zone per crank angle (step/animate in Tecplot)."""
+
+    c = _orbit_common(curve)
+    fr = _orbit_frames(c)
+    time_s = fr["theta"] / c["geometry"].angular_speed_rad_s
+    angle = np.degrees(fr["theta"])
+    phi_deg = np.degrees(np.linspace(0.0, 2.0 * pi, 361))
+    phi = np.radians(phi_deg)
+    h_um = (
+        c["c_j"] - (fr["ejx"][None, :] * np.cos(phi)[:, None] + fr["ejy"][None, :] * np.sin(phi)[:, None])
+    ) * 1e6  # [phi, time]
+    frames = [
+        (float(time_s[j]), float(angle[j]), [phi_deg, h_um[:, j]]) for j in range(time_s.size)
+    ]
+    _write_film_strand(path, "phi_deg", frames, "Journal film h(phi) per crank angle (transient)")
+
+
+def _data_curved_map(curve, side, x_key, y_key, phi_key, path, title):
+    c = _orbit_common(curve)
+    fr = _orbit_frames(c)
+    order = fr["order"]
+    orbit = c["orbit"]
+    time_s = fr["theta"] / c["geometry"].angular_speed_rad_s
+    angle = np.degrees(fr["theta"])
+    xk = np.array(getattr(orbit, x_key))[order]
+    yk = np.array(getattr(orbit, y_key))[order]
+    phik = np.array(getattr(orbit, phi_key))[order]
+    ecc_x, ecc_y = xk - fr["gx"], yk - fr["gy"]
+    center = (0.0 if side > 0.0 else pi) + phik  # arc centre azimuth per sample
+    beta_rel_deg = np.degrees(np.linspace(-c["half_arc"], c["half_arc"], 181))
+    beta = center[None, :] + np.radians(beta_rel_deg)[:, None]  # [beta, time]
+    h_um = (c["curved_gap"] - (ecc_x[None, :] * np.cos(beta) + ecc_y[None, :] * np.sin(beta))) * 1e6
+    frames = [
+        (float(time_s[j]), float(angle[j]), [beta_rel_deg, h_um[:, j]]) for j in range(time_s.size)
+    ]
+    _write_film_strand(path, "beta_rel_deg", frames, title)
+
+
+def data_orbit_film_curved_in(curve: PressureCurve, path: Path) -> None:
+    """Transient: IN-piece curved (rotor-groove) film h(beta) per crank angle."""
+    _data_curved_map(
+        curve, 1.0, "in_piece_x_m", "in_piece_y_m", "in_piece_attitude_rad", path,
+        "IN bush curved film h(beta) per crank angle (transient)",
+    )
+
+
+def data_orbit_film_curved_out(curve: PressureCurve, path: Path) -> None:
+    """Transient: OUT-piece curved (rotor-groove) film h(beta) per crank angle."""
+    _data_curved_map(
+        curve, -1.0, "out_piece_x_m", "out_piece_y_m", "out_piece_attitude_rad", path,
+        "OUT bush curved film h(beta) per crank angle (transient)",
+    )
+
+
+def _data_flat_map(curve, side, x_key, phi_key, path, title):
+    c = _orbit_common(curve)
+    fr = _orbit_frames(c)
+    order = fr["order"]
+    geometry, orbit, bush = c["geometry"], c["orbit"], c["bush"]
+    time_s = fr["theta"] / geometry.angular_speed_rad_s
+    angle = np.degrees(fr["theta"])
+    xk = np.array(getattr(orbit, x_key))[order]
+    phik = np.array(getattr(orbit, phi_key))[order]
+    lf = np.array([flat_contact_length_m(geometry, float(t), bush) for t in fr["theta"]])
+    xi = np.linspace(-0.5, 0.5, 101)  # pad fraction; the actual mm position (s) varies with θ
+    approach = c["shift"] - side * xk
+    frames = []
+    for j in range(time_s.size):
+        s_mm = xi * lf[j] * 1e3  # actual pad position at this crank angle
+        h_um = ((c["flat_gap"] - approach[j]) + xi * lf[j] * phik[j]) * 1e6
+        frames.append((float(time_s[j]), float(angle[j]), [s_mm, h_um]))
+    _write_film_strand(path, "s_mm", frames, title)
+
+
+def data_orbit_film_flat_in(curve: PressureCurve, path: Path) -> None:
+    """Transient: IN-piece flat (vane) film h(s) per crank angle."""
+    _data_flat_map(
+        curve, 1.0, "in_piece_x_m", "in_piece_attitude_rad", path,
+        "IN bush flat film h(s) per crank angle (transient)",
+    )
+
+
+def data_orbit_film_flat_out(curve: PressureCurve, path: Path) -> None:
+    """Transient: OUT-piece flat (vane) film h(s) per crank angle."""
+    _data_flat_map(
+        curve, -1.0, "out_piece_x_m", "out_piece_attitude_rad", path,
+        "OUT bush flat film h(s) per crank angle (transient)",
+    )
+
+
+def data_orbit_state_timeseries(curve: PressureCurve, path: Path) -> None:
+    """1-D series: rotor/piece kinematics, film thicknesses, and seal contact vs crank angle."""
+
+    orbit = _coupled_bush_orbit(curve)
+    theta = np.degrees(np.array(orbit.crank_angle_rad))
+    order = np.argsort(theta)
+    n = theta.size
+
+    def col(seq, scale=1.0):
+        arr = np.array(seq, dtype=float)
+        return (arr[order] * scale) if arr.size == n else np.zeros(n)
+
+    columns = [
+        theta[order],
+        col(orbit.eccentricity_x_m, 1e6), col(orbit.eccentricity_y_m, 1e6),
+        col(orbit.rotor_attitude_deviation_rad, 1e3),
+        col(orbit.in_piece_x_m, 1e3), col(orbit.in_piece_y_m, 1e3),
+        col(orbit.in_piece_attitude_rad, 1e3),
+        col(orbit.out_piece_x_m, 1e3), col(orbit.out_piece_y_m, 1e3),
+        col(orbit.out_piece_attitude_rad, 1e3),
+        col(orbit.in_curved_film_m, 1e6), col(orbit.in_flat_film_m, 1e6),
+        col(orbit.out_curved_film_m, 1e6), col(orbit.out_flat_film_m, 1e6),
+        col(orbit.seal_normal_force_n), col(orbit.seal_penetration_m, 1e6),
+    ]
+    variables = [
+        "theta_deg", "e_jx_um", "e_jy_um", "dphi_r_mrad",
+        "in_x_mm", "in_y_mm", "in_phi_mrad", "out_x_mm", "out_y_mm", "out_phi_mrad",
+        "in_curved_um", "in_flat_um", "out_curved_um", "out_flat_um",
+        "seal_normal_n", "seal_penetration_um",
+    ]
+    write_dat(path, variables, [point_zone("orbit_state", columns)],
+              title="Coupled rotor-bush orbit - kinematics, films, seal (final revolution)")
+
+
+def data_orbit_force_timeseries(curve: PressureCurve, path: Path) -> None:
+    """1-D series: every per-part force/moment channel vs crank angle (N, N*m)."""
+
+    orbit = _coupled_bush_orbit(curve)
+    channels = orbit.sample_channels or {}
+    theta = np.degrees(np.array(orbit.crank_angle_rad))
+    order = np.argsort(theta)
+    names = list(channels)
+    columns = [theta[order]] + [np.array(channels[k], dtype=float)[order] for k in names]
+    variables = ["theta_deg", *names]
+    write_dat(path, variables, [point_zone("orbit_forces", columns)],
+              title="Coupled rotor-bush orbit - per-part forces and moments (final revolution)")
+
+
+def data_reynolds_curved(geometry: RotaryGeometry, path: Path) -> None:
+    """1-D series: bush curved film — arc_film vs long-bearing load over ε."""
+    d = _reynolds_curved_data(geometry)
+    columns = [d["eps"], d["lb_mag"], d["arc_mag"]]
+    write_dat(path, ["eps", "F_long_bearing_N", "F_arc_film_N"], [point_zone("curved", columns)],
+              title=f"Bush curved film validation (max rel. err {d['err']:.2e})")
+
+
+def data_reynolds_flat(geometry: RotaryGeometry, path: Path) -> None:
+    """1-D series: bush flat film — slider_film vs fixed-incline slider over the wedge tilt."""
+    d = _reynolds_flat_data(geometry)
+    columns = [[t * 1e3 for t in d["tilts"]], d["inc"], d["sld"]]
+    write_dat(path, ["tilt_mrad", "W_incline_N", "W_slider_N"], [point_zone("flat", columns)],
+              title=f"Bush flat film validation (max rel. err {d['err']:.2e})")
+
+
+def data_reynolds_journal(geometry: RotaryGeometry, path: Path) -> None:
+    """1-D series: journal film — 1-D numerical Reynolds vs Ocvirk short bearing over ε."""
+    d = _reynolds_journal_data()
+    columns = [d["epsj"], d["ocv"], d["num"]]
+    write_dat(path, ["eps", "F_ocvirk_N", "F_reynolds_1d_N"], [point_zone("journal", columns)],
+              title=f"Journal film validation (max rel. err {d['err']:.2e})")
+
+
+# Raw-data manifest (paths are relative to results/data/). Same kind dispatch as FIGURES:
+# "curve" reuses the shared coupled orbit, "geometry" needs only the static geometry.
+DATASETS: dict[str, tuple[str, object]] = {
+    "orbit/state_timeseries.dat": ("curve", data_orbit_state_timeseries),
+    "orbit/force_timeseries.dat": ("curve", data_orbit_force_timeseries),
+    "orbit/film_journal.dat": ("curve", data_orbit_film_journal),
+    "orbit/film_curved_in.dat": ("curve", data_orbit_film_curved_in),
+    "orbit/film_curved_out.dat": ("curve", data_orbit_film_curved_out),
+    "orbit/film_flat_in.dat": ("curve", data_orbit_film_flat_in),
+    "orbit/film_flat_out.dat": ("curve", data_orbit_film_flat_out),
+    "validation/reynolds_curved.dat": ("geometry", data_reynolds_curved),
+    "validation/reynolds_flat.dat": ("geometry", data_reynolds_flat),
+    "validation/reynolds_journal.dat": ("geometry", data_reynolds_journal),
+}
+
+
 FIGURES: dict[str, tuple[str, object]] = {
     # Physics figures — one single-axes figure per file, grouped by topic folder.
     "chamber_pressure/vs_crank.png": ("curve", render_chamber_pressures),
@@ -6997,6 +7978,24 @@ FIGURES: dict[str, tuple[str, object]] = {
     "bearing_load/eccentric_friction_power.png": ("curve", render_eccentric_friction_power),
     "bush_film/rotor_swing_vs_bush.png": ("geometry", render_rotor_swing_vs_bush),
     "bush_film/bush_translation_vs_vane.png": ("geometry", render_bush_translation_vs_vane),
+    "bush_film/reynolds_curved_vs_long_bearing.png": ("geometry", render_film_reynolds_curved),
+    "bush_film/reynolds_flat_vs_incline_slider.png": ("geometry", render_film_reynolds_flat),
+    "bush_film/reynolds_journal_vs_ocvirk.png": ("geometry", render_film_reynolds_journal),
+    "bush_film/film_clearance_journal.png": ("curve", render_film_clearance_journal),
+    "bush_film/film_clearance_bush_curved.png": ("curve", render_film_clearance_bush_curved),
+    "bush_film/film_clearance_bush_flat.png": ("curve", render_film_clearance_bush_flat),
+    "bush_film/bush_curved_clearance_vs_crank.png": (
+        "curve",
+        render_bush_curved_clearance_vs_crank,
+    ),
+    "bush_film/bush_flat_clearance_vs_crank.png": ("curve", render_bush_flat_clearance_vs_crank),
+    "assembly/layout_42deg.png": ("curve", render_assembly_layout),
+    "assembly/bush_clearance_42deg.png": ("curve", render_assembly_bush_clearance),
+    "assembly/journal_clearance_42deg.png": ("curve", render_assembly_journal_clearance),
+    "bearing_load/friction_dynamic_vs_quasistatic.png": (
+        "curve",
+        render_friction_dynamic_vs_quasistatic,
+    ),
     "bearing_load/roller_vs_crank.png": ("geometry", render_roller_vs_crank),
     "volumetric_efficiency/recompression_pressure.png": ("curve", render_recompression_pressure),
     "volumetric_efficiency/chamber_mass.png": ("curve", render_chamber_mass),
@@ -7067,12 +8066,47 @@ def prune_stale(prune: bool) -> list[Path]:
     return stale
 
 
+def _ensure_curve(curve: PressureCurve | None, geometry: RotaryGeometry) -> PressureCurve:
+    """Build the shared port-timed pressure trace once, reusing it across figures and data."""
+
+    if curve is None:
+        print("Building the port-timed cycle trace (a minute or so)...")
+        curve = PressureCurve(geometry)
+    return curve
+
+
+def _run_manifest(manifest: dict, base_dir: Path, geometry, curve, verb: str):
+    """Run a FIGURES/DATASETS manifest, dispatching by kind; returns the (reused) curve."""
+
+    for name, (kind, fn) in manifest.items():
+        path = base_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "curve":
+            curve = _ensure_curve(curve, geometry)
+            print(f"{verb} {name} ...")
+            fn(curve, path)
+        else:
+            print(f"{verb} {name} ...")
+            fn(geometry, path)
+    return curve
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--prune",
         action="store_true",
         help="delete results/ images this script does not produce",
+    )
+    parser.add_argument(
+        "--data",
+        action="store_true",
+        help="also export raw Tecplot .dat data under results/data/ (illustration PNGs + data)",
+    )
+    parser.add_argument(
+        "--data-only",
+        action="store_true",
+        help="export only the raw .dat data (skip figures and pruning)",
     )
     args = parser.parse_args()
 
@@ -7081,23 +8115,18 @@ def main() -> int:
     geometry = RotaryGeometry.default()
 
     curve: PressureCurve | None = None
-    for name, (kind, renderer) in FIGURES.items():
-        path = RESULTS_DIR / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if kind == "curve":
-            if curve is None:
-                print("Building the port-timed cycle trace (a minute or so)...")
-                curve = PressureCurve(geometry)
-            print(f"Rendering {name} ...")
-            renderer(curve, path)  # type: ignore[operator]
-        else:
-            print(f"Rendering {name} ...")
-            renderer(geometry, path)  # type: ignore[operator]
+    if not args.data_only:
+        curve = _run_manifest(FIGURES, RESULTS_DIR, geometry, curve, "Rendering")
 
-    if PENDING_LEGACY_FIGURES:
-        print(f"Preserving {len(PENDING_LEGACY_FIGURES)} legacy figure(s) not yet ported.")
-    print("Checking for figures outside the manifest...")
-    prune_stale(args.prune)
+    if args.data or args.data_only:
+        # Reuses the same curve (and its cached coupled orbit) as the figures above.
+        curve = _run_manifest(DATASETS, DATA_DIR, geometry, curve, "Writing data")
+
+    if not args.data_only:
+        if PENDING_LEGACY_FIGURES:
+            print(f"Preserving {len(PENDING_LEGACY_FIGURES)} legacy figure(s) not yet ported.")
+        print("Checking for figures outside the manifest...")
+        prune_stale(args.prune)
 
     print("Done.")
     return 0

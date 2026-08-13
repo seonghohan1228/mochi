@@ -5,8 +5,58 @@ and append new work under `Unreleased`; Git remains the detailed history.
 
 ## Unreleased
 
+### Fixed
+
+- **Cavitation was skipped whenever a film had gas boundary conditions**
+  (`mochi.slider_film`, `mochi.arc_film`). The clamp was switched off on the assumption that
+  "high gas pressure floods the film and suppresses cavitation"; evaluating the real state
+  showed the total **absolute** pressure reaching **-11.6 MPa** on the diverging half-stroke
+  of the reciprocating bush pad — worth -2310 N of spurious suction. Cavitation is a
+  constraint on the *total* field, so both solvers now solve the hydrodynamic problem
+  unclamped, superpose the Poiseuille gas bias (Reynolds is linear in `p`), and clamp the sum
+  at the new `cavitation_pressure_pa` (same gauge as the end pressures, default `0.0` =
+  classic Gumbel, so the validated pure-hydrodynamic path is bit-for-bit unchanged). The
+  floor now follows one rule across all three films — *a film cannot fall below the lowest
+  pressure it is connected to* — which degenerates to the journal's existing `p_cav = ambient`
+  (PHYSICS.md 4.10). Bush loss in the 3-option regime falls 91 -> 6 W and, more importantly,
+  the flat film finally **thickens with speed** instead of thinning. See
+  `docs/bush_film_revision_2026-08.md`.
+
 ### Added
 
+- **Curved-film gas boundary and sealing land** (`mochi.rotor_bush_dynamics`, opt-in with
+  `gas_film_boundary`). The bore->chamber drop was imposed on the flat film only, and the arc
+  was integrated over the whole piece span. Per PHYSICS.md 3.3 the curved film lives on the
+  **86.5 deg sealing land**, whose ends open to the rotor mouth (the piece's chamber) and to
+  the 4.0 MPa recess channel; both are now modelled (mirrored between the pieces). The
+  resulting +367 N/piece away from the vane largely cancels the flat film's -400 N squeeze.
+- **Greenwood-Tripp asperity contact** (`mochi.asperity_contact`) replacing the arbitrary
+  `P0 = 50 MPa` exponential scale, driven by measurable surface parameters (sigma, beta, eta,
+  E'), and applied to **both** bush films by load sharing instead of the hard eccentricity
+  clamp. Adds `curved_asperity` / `asperity_params` toggles for isolation studies.
+- **Bush friction diagnostics**: the flat-film loss is split into its boundary
+  (asperity-borne, linear in `FLAT_BOUNDARY_COEFF`) and viscous parts, with the cycle-mean
+  asperity load, on `RotorBushOrbit` — the split that identified the boundary term as the
+  dominant channel and ruled out a `mu_b` calibration.
+
+- **Raw-data export for research post-processing (`mochi.tecplot`,
+  `generate_results.py --data`).** The `results/` PNGs are illustration only; the numbers
+  behind the coupled-orbit and validation figures are now exported as Tecplot ASCII `.dat`
+  under `results/data/` (1-D point zones and 2-D ordered surface zones). Datasets: the
+  coupled orbit's per-crank-angle kinematics/films/seal and its 28 per-part force/moment
+  channels (`RotorBushOrbit.sample_channels`, newly retained per angle), the three films'
+  thickness fields over the whole cycle (crank-angle × position), and the 1-D-Reynolds
+  validation curves. Run with `--data` (figures + data) or `--data-only`; the coupled orbit
+  is integrated once and shared. See `docs/data_export.md`.
+- **Bush clearance / rotor-mouth animation (`mochi.bush_gui`, `mochi bush-gui`).**
+  A separate viewer from `mochi.gui`: animates the coupled 9-DOF orbit over one
+  revolution with a two-panel figure — a zoomed-out, true-scale main panel showing the
+  real rotor contour at the mouth (`rotor_profile.rotor_contour`, whose groove is part of
+  the rotor shape), the fixed vane and the two swing-bush pieces moving; and a x60
+  exaggerated inset (the `assembly/bush_clearance` view) with the curved/flat films and the
+  `O_g`/`O_p(IN/OUT)` centre offsets. Tk window (matplotlib embedded) with a crank-angle
+  slider, play/pause and *Save GIF*; `--gif` renders `bush_clearance_cycle.gif` headless.
+  The orbit is computed once (optional `.npz` cache). `mochi.gui` is unchanged.
 - **Stage 5 — 9-DOF rotor + two-piece swing-bush multibody dynamics**
   (`mochi.rotor_bush_dynamics`, PHYSICS.md 4.14). The two bush pieces become
   independent bodies coupled to the rotor by the curved (`arc_film`) and flat
@@ -15,6 +65,40 @@ and append new work under `Unreleased`; Git remains the detailed history.
   against the fixed vane through the bush, driving the curved film near contact at
   peak (~0.4 um). The **dynamic bush-film friction ~0.6 W is the value of record**
   (the 0.2 W quasi-static `bush_film` estimate is kept only for comparison).
+- **Rotor-cylinder seal contact coupled into the 9-DOF EOM** (`seal_contact=True`,
+  now the default; PHYSICS.md 4.14). The compliant Hertz line contact + boundary
+  friction act on the rotor lateral/attitude EOM, so the crank-pin journal, the swing
+  bush, and the cylinder share the load by their true stiffnesses. This roughly
+  **doubles the sealing load vs the free-rotor model** — N_c mean ~296 N, and the
+  rotor-cylinder loss rises to **~11 W (the value of record)**, the largest single
+  mechanical loss. Attribution: the bush reaction is *inward*; tying the rotor to the
+  fixed vane loads the journal (+323->+709 N outward), which presses the rotor ~1 um
+  deeper into the bore. Seal engagement scales with omega^2 (centrifugal), so the
+  coupling must stay on for any operating-speed sweep. Validated: revolution-converged
+  N_c, closed radial force balance, undistorted attitude. New result figures:
+  `bush_film/reynolds_{curved_vs_long_bearing, flat_vs_incline_slider, journal_vs_ocvirk}.png`
+  (1-D Reynolds vs the analytical model for each film, error <= 1e-4),
+  `bush_film/film_clearance_{journal, bush_curved, bush_flat}.png` (each film's clearance at
+  the most-loaded crank angle), and
+  `bearing_load/friction_dynamic_vs_quasistatic.png` (per-film quasi-static vs dynamic:
+  bush x3.3, journal x1.0, seal x3.7, total x1.6). Note (open item): the bush films use
+  p=0 Dirichlet ends, so the chamber discharge/suction/crank gas pressures are not yet
+  imposed as boundary conditions (gas Poiseuille bias + throughflow leakage omitted).
+- **Gas-pressure film boundary conditions** (`mochi.line_reynolds.poiseuille_bias_pressure`;
+  `arc_film_force`/`flat_slider_film` `pressure_start_pa`/`pressure_end_pa`; PHYSICS.md 4.11).
+  The 1-D film solvers now impose the chamber/crank gas pressures at the film ends,
+  superposing the Poiseuille gas-bias field (Reynolds is linear in p; full-Sommerfeld under
+  gas flooding) and reporting the throughflow leakage. Available in the coupled 9-DOF EOM
+  as an opt-in finding (`integrate_rotor_bush_orbit` `gas_film_boundary=True`, default
+  False; `bore_pressure_pa=4 MPa`):
+  the piece is immersed in the bore gas, so referenced to it (divergence theorem) only the
+  flat vane-sealing film carries a bore->chamber drop (IN=suction, OUT=compression). **The
+  effect is dominant** — the bore gas presses each piece onto the vane, driving the flat
+  film from ~1.8 um to the 0.20 um contact floor and raising the bush friction from 0.67 to
+  ~5.5 W (x8); the rotor orbit and rotor-cylinder seal are unchanged. The flat film reaches
+  metal contact, so this value is contact-clamp-limited: the vane-bush flat interface now
+  needs an EHL/contact treatment (as the rotor-cylinder seal got). `gas_film_boundary=False`
+  recovers the pure hydrodynamic films.
 - **Long-bearing (Sommerfeld) analytical model** (`mochi.long_bearing`, PHYSICS.md
   4.11) — the infinitely-long journal counterpart to the short-bearing Ocvirk model,
   and the closed-form benchmark for the curved bush film: `arc_film` reproduces it to
@@ -28,8 +112,9 @@ and append new work under `Unreleased`; Git remains the detailed history.
   the rotor EOM (removing the ~6 um free-orbit bore-penetration artifact), and the
   EHL line-contact film (`ehl_film_thickness_m`) sets the lubrication regime. At the
   Ra 0.3 um design finish (composite RMS sigma = 0.53 um) the film parameter is
-  ~0.45 (boundary), giving a **rotor-cylinder loss ~6.7 W** — a first-order term
-  comparable to the crank-pin journal. References: Yanagisawa & Shimizu 1985; the
+  ~0.45 (boundary), giving a **rotor-cylinder loss ~6.7 W** in this **standalone
+  4-state free-rotor** model — now a cross-check; the coupled 9-DOF value of record is
+  ~11 W (see the seal-coupling entry above). References: Yanagisawa & Shimizu 1985; the
   2024 mixed-lubrication review (Lubricants 12(8):273); Daikin swing compressor.
 - Added the first physics layers on top of the prescribed pressure/volume
   models. `mochi.indicated_work` computes the indicated work and power from the
