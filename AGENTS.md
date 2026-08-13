@@ -159,6 +159,16 @@ kept "just in case."
   rather than portable, drop it from `PENDING_LEGACY_FIGURES` so `--prune`
   reclaims it. A figure with no renderer and not on the pending list is, by
   definition, neither reproducible nor current.
+- **Plotting conventions (`docs/plotting_conventions.md`), standing user
+  requirements — do not regress:** (1) **one plot per figure** — a single
+  Matplotlib axes per file, never a multi-panel montage; split a many-view topic
+  into several files. (2) **Group same-topic figures in one `results/<topic>/`
+  folder.** (3) **Annotations must not obscure the graph** — legends outside the
+  axes (`_legend_above`) or in an empty corner, callouts in empty regions with a
+  leader arrow, never on the curves. (4) **Grid/convergence tests** are presented
+  as a **grid-count vs relative-error** graph (error vs the finest grid, log y),
+  **one channel/quantity per figure** (never several on one axes) and **monochrome
+  (black)**, in `results/convergence/`, with the table in a summary file.
 
 ## Definition of done
 

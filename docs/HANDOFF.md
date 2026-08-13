@@ -37,16 +37,63 @@ section + `results/` figure + tests**, cross-checked against earlier rungs.
   **Bush loss of record = dynamic ~0.6 W** (quasi-static 0.2 W kept for comparison only).
   Hydrodynamic-only first cut
   (gas-pressure film bias omitted) — flags the bush as the critical lube site.
-- **Still remaining in D2:** rotor–cylinder contact (Hertz/EHL), 2-D Reynolds, and the
-  gas-pressure film bias / EHL for the near-contact bush film. The rotor EOM and the
-  bush multibody both exist now; the contact rung and L2 films remain.
+- **Rotor–cylinder seal now COUPLED into the 9-DOF by default (2026-08):**
+  `seal_contact=True` adds the Hertz line contact + boundary friction to the rotor
+  lateral/attitude EOM, so journal + bush + cylinder share load by true stiffnesses.
+  **N_c mean ~296N / peak ~1455N (≈2× the free-rotor model), W_r-c ≈ 11 W** — the value
+  of record. Attribution: the **bush pulls inward** (−234N); tying the rotor to the fixed
+  vane **loads the journal** (+323→+709N outward) which presses the rotor ~1µm deeper →
+  N_c doubles. Keep `seal_contact=True` for any **ω-sweep** (seal engagement ∝ ω² via the
+  centrifugal). `seal_contact=False` isolates the bush films (reduction checks only).
+- **Gas-pressure film BCs (2026-08, `gas_film_boundary=True` opt-in; default keeps the
+  validated hydro films):** the 1-D film solvers take chamber/crank gas pressures at the ends
+  (`poiseuille_bias_pressure`, superposition) + report throughflow leakage. Piece immersed in
+  **bore/recess gas P_bore=4MPa** (user), referenced to bore (divergence theorem). **Both**
+  bush films now carry a drop: the **flat vane-film** bore→chamber (IN=suction,
+  OUT=compression), and the **curved film** across its **86.5° sealing land** whose ends open
+  to the rotor mouth (chamber) and the recess channel (4MPa) — the curved mapping that used
+  to be missing (PHYSICS §3.3/4.11). The curved drop gives **+367N/piece away from the vane**,
+  largely cancelling the flat film's −400N squeeze.
+- **Film cavitation BUG FIXED (2026-08) — supersedes the earlier "×8 bush friction"
+  finding:** the clamp used to be switched **off** whenever end pressures were present
+  ("gas flooding suppresses cavitation"). At the real state the total **absolute** pressure
+  reached **−11.6 MPa** on the diverging half-stroke of the reciprocating pad (−2310N of
+  impossible suction). Cavitation constrains the **total** field, so the solvers now solve
+  the hydro part unclamped, superpose the gas bias, and clamp the sum at
+  `cavitation_pressure_pa` (default 0 = classic Gumbel → **pure-hydro path unchanged**). One
+  floor rule for all three films: *no lower than the lowest connected pressure* (degenerates
+  to the journal's `p_cav = ambient`). Bush loss in the 3-option regime **91 → 6 W @1800rpm**,
+  and the flat film **thickens with speed** instead of thinning.
+- **Mixed lubrication = Greenwood-Tripp (2026-08, `mochi.asperity_contact`)** on **both**
+  bush films by load sharing, replacing the arbitrary `P0 = 50 MPa` exponential and the hard
+  eccentricity clamp. Flat-film friction is split into **boundary vs viscous** on
+  `RotorBushOrbit`. **`µ_b` calibration is ruled out** — the coefficient needed to hit any
+  target differs **9×** between 1800 and 5400 rpm, so the discrepancy was structural.
+  Open: `β, η` need a surface measurement (bush loss spans 66–91 W over the literature range).
+- **Thin curved film is a LOAD-PATH consequence, not an artefact:** the attitude EOM closes
+  (`M_gas +22.2` vs `M_bush,curved −21.3 N·m`, residual 2% of the reference inertia torque),
+  so reacting the gas moment at `l_g`=25mm needs **851N**; an `arc_film` load sweep puts 851N
+  at **ε≈0.985 → 0.45µm**, matching the coupled orbit (0.58µm). Adding **Winkler elastic
+  compliance** to the arc moved `ε/ε_max` only 1.328→1.330 (the eccentricity is set by
+  *geometry* — the piece is pinned to the vane while the groove rides the rotor) and was
+  **reverted**. Full record + negative results: `docs/bush_film_revision_2026-08.md`.
+- **Still remaining in D2:** 2-D Reynolds; the cavitation floor's exact value (needs an
+  oil/refrigerant **solubility** model — bush loss 48.7 W vs 6.2 W across the plausible span);
+  GT surface parameters. Rotor EOM, bush multibody, rotor–cylinder contact rung, gas-pressure
+  film BCs (both films), and mixed lubrication all exist now.
+- **Validation vs Pan et al. 2022 (2026-08) — anchor only, never a fit target.** Different
+  machine (valveless swing, 10.34cc) at different pressures, so absolute per-channel losses
+  do not transfer; mechanism differences make the efficiency gap unpredictable. What *did*
+  transfer: our **journal speed exponent 1.92 vs their 2.00**, and our seal/journal magnitudes
+  within ~25% of the size-scaled values — which is what made the 91 W bush channel stand out
+  and triggered the review. **No parameter in this repo is fitted to a Pan value.**
 - **Bush-film primitives rebuilt (2026-07):** `arc_film` (curved) + `slider_film`
   (flat) now use the **axial-uniform 1-D** reduction (pressure solved along the film
   line × H) via shared `line_reynolds.py`, per the user's spec — NOT the earlier
   axial short-bearing (which was the wrong reduction for the bush L/D>1; kept only for
   the L/D<1 journal). Validated: slider vs Reynolds incline closed form; arc vs slider
   in the shallow limit; manufactured-solution convergence. See PHYSICS §4.11.
-- Suite: **387 passed**, `ruff` clean.
+- Suite: **416 passed**, `ruff` clean.
 - **Rotor-cylinder sealing contact scoped (2026-08):** the swing rotor **slides** on the
   bore (net-zero spin → not a rolling piston), mean |v|≈0.95 m/s (peak 2.0). Boundary
   friction `P=⟨μ N_c |v_slide|⟩` in `rotor_cylinder.py` (μ≈0.1 steel-steel boundary,
@@ -57,9 +104,12 @@ section + `results/` figure + tests**, cross-checked against earlier rungs.
   compliant Hertz line contact (Palmgren) in the rotor EOM closes N_c with no free
   param → penetration 6µm→1.4µm (physical), N_c mean ~140N/peak ~780N. Full-EHL check:
   EHL line contact (R_eq=291mm) h_min~0.24µm; at the **Ra 0.3µm design finish** (composite
-  RMS σ=0.53µm, Λ=√2·1.25·Ra) Λ~0.45 → **boundary regime** → **W_r-c ≈ 6.7 W** (mixed-EHL
-  = boundary). Journal-film treatment invalid (c=4.5mm≫thin-film). **So the seal is a
-  first-order loss, ≈ the journal (8.9W), ≫ bush.** `ehl_film_thickness_m` reports Λ.
+  RMS σ=0.53µm, Λ=√2·1.25·Ra) Λ~0.45 → **boundary regime**. This standalone
+  `integrate_sealing_contact` is a **4-state free-rotor** model → **W_r-c ≈ 6.7 W**; it is
+  now a cross-check only. The **coupled 9-DOF value of record is ≈11 W** (see the coupled
+  bullet above). Journal-film treatment invalid (c=4.5mm≫thin-film). **So the seal is the
+  largest single mechanical loss (≈11W, coupled) — above the journal (8.9W), ≫ bush.**
+  `ehl_film_thickness_m` reports Λ.
   Refs: Yanagisawa&Shimizu 1985; mixed-lube review Lubricants 2024; Daikin swing (Purdue/IJR).
 - **arc_film validated vs long-bearing analytical (2026-07):** the curved bush film is
   the long-bearing ($L/D>1$) journal limit, so it is cross-checked against the exact
@@ -100,8 +150,12 @@ rotor **0.275 kg**, `I_r`=2.11e-4, bush **6.341 g**, shaft 0.379 kg (dormant).
 | `reynolds_1d.py` | 4.10–4.12 | **D2** — 1-D finite-width (short-bearing) **numerical Reynolds** solver (`solve_short_bearing_1d`): tridiagonal axial FD + Gumbel cavitation, **validates vs Ocvirk to ~1e-4**. First PDE-style film solver; machinery for the later 2-D |
 | `long_bearing.py` | 4.11 | **D2 — infinitely-long (Sommerfeld) journal analytical** (`long_bearing_load`, `sommerfeld_pressure`): the closed-form long-bearing ($L/D>1$) benchmark for the curved bush film. `arc_film` matches it to ~1e-7 (ε 0.2–0.9); attitude invariant tan φ=π√(1−ε²)/(2ε). The long-bearing twin of the Ocvirk short-bearing check |
 | `rotor_dynamics.py` | 4.13 | **NEW (D2) — the rotor lateral EOM + time integration** (`integrate_rotor_orbit` → `RotorOrbit`): `m_r ë = F_gas + F_film(ê,ê̇) + m_r ω² O_j`, implicit BDF (`scipy.solve_ivp`) → steady whirl orbit. **First real mechanical time integration.** Dynamic peak ε 0.50 < quasi-static 0.71 (squeeze lag). `ROTOR_MASS_KG`=0.275 editable |
-| `rotor_bush_dynamics.py` | 4.14 | **NEW (D2, Stage 5) — 9-DOF rotor + two-piece swing-bush multibody** (`integrate_rotor_bush_orbit` → `RotorBushOrbit`): 18-state stiff BDF; both bush pieces are bodies coupled by the curved (`arc_film`) + flat (`slider_film`) films. Gas moment reacted through the bush → curved film near contact at peak (~0.5 µm). Confirmed `I_r`=2.11e-4, `m_p`=6.341 g. Stiff — loose velocity `atol` lets BDF step over the squeeze mode |
-| `gui.py`, `cli.py`, `__main__.py` | — | visualization / plumbing |
+| `rotor_bush_dynamics.py` | 4.14 | **NEW (D2, Stage 5) — 9-DOF rotor + two-piece swing-bush multibody** (`integrate_rotor_bush_orbit` → `RotorBushOrbit`): 18-state stiff BDF; both bush pieces are bodies coupled by the curved (`arc_film`) + flat (`slider_film`) films. Gas moment reacted through the bush → curved film near contact at peak (~0.5 µm). Confirmed `I_r`=2.11e-4, `m_p`=6.341 g. Stiff — loose velocity `atol` lets BDF step over the squeeze mode. **`seal_contact=True` (default)** couples the rotor–cylinder Hertz contact into the EOM (N_c ~296N, W_r-c ~11W; keep on for ω-sweeps) |
+| `asperity_contact.py` | 4.11 | **NEW (2026-08)** — Greenwood-Tripp elastic asperity contact `p_asp(h)` from measurable surface parameters (σ, β, η, E'), replacing an arbitrary pressure scale. Load-shares with **both** bush films; `AsperityParams` carries the literature ground-steel defaults (ηβσ≈0.05) pending a surface measurement |
+| `bush_outline.py` | 3.3 | **NEW (2026-08)** — the single source for the swing-bush piece and vane outlines in mm, shared by the results figures and `bush_gui` (was copy-pasted in three places). `close_bore_arc` selects the vane's top bore arc |
+| `bush_gui.py` | 4.14 | **NEW (2026-08)** — coupled-orbit viewer: true-scale rotor-mouth panel + ×60 clearance inset, animated over one revolution. GIF export or Tk window with a crank-angle slider (`mochi bush-gui`). Orbit is cached to `.npz` since it costs minutes |
+| `tecplot.py` | — | **NEW (2026-08)** — Tecplot ASCII writer (1-D point zones, 2-D ordered zones, and **transient strands** with STRANDID/SOLUTIONTIME). Backs the `results/data/` raw export from `generate_results.py --data`; see `docs/data_export.md` |
+| `gui.py`, `cli.py`, `__main__.py` | — | visualization / plumbing (`cli.py` also fronts `bush-gui`) |
 
 ### tests/ — `test_*.py` per module (incl. `test_reynolds_1d.py` 15, new `test_rotor_dynamics.py` 9)
 ### `scripts/generate_results.py` — every figure under `results/`; new coordinate figs `geometry/{journal_film_coordinates, journal_film_axial, bush_film_coordinates, bush_attitude_reference}.png` + `bearing_load/{reynolds_1d_validation, rotor_orbit}.png`

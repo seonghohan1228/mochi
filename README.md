@@ -118,6 +118,24 @@ stops the first time the clockwise motion reaches that angle; pressing `Start`
 again completes one more full revolution back to the same angle. This is a
 display control only and does not change the physical speed.
 
+## Bush clearance / rotor-mouth animation
+
+A separate viewer animates the **coupled 9-DOF rotor+bush orbit** over one revolution:
+
+```bash
+python -m mochi bush-gui                 # interactive Tk window (computes the orbit, ~minutes)
+python -m mochi bush-gui --gif out.gif   # render the animation to a GIF and exit
+python -m mochi bush-gui --cache orbit.npz   # cache/reuse the orbit so relaunches are instant
+```
+
+It shows two panels per crank angle: a zoomed-out, true-scale **main** view of the real
+rotor contour at the mouth (`mochi.rotor_profile.rotor_contour`, whose groove is part of the
+rotor shape), the fixed vane, and the two swing-bush pieces moving; and a **x60 exaggerated
+inset** — the `assembly/bush_clearance` view — with the curved (rotor-groove) and flat (vane)
+films and the centre offsets `O_g`, `O_p(IN/OUT)`. The Tk window has a crank-angle slider,
+play/pause and a *Save GIF* button. This is `mochi.bush_gui`, independent of the
+prescribed-motion GUI above. Needs the plotting extra (`pip install -e ".[viz]"`).
+
 ## Collaboration model
 
 `main` is the protected, reproducible project history. It should contain only
